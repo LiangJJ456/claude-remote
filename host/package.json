@@ -1,0 +1,13 @@
+{
+  "name": "claude-remote-host",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test test/"
+  },
+  "dependencies": {
+    "@lydell/node-pty": "^1.1.0",
+    "ws": "^8.18.0"
+  }
+}
