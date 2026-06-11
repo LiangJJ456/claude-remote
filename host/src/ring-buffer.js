@@ -2,6 +2,9 @@
 
 class RingBuffer {
   constructor(limit) {
+    if (!Number.isInteger(limit) || limit <= 0) {
+      throw new RangeError(`RingBuffer limit must be a positive integer, got ${limit}`);
+    }
     this.limit = limit;
     this.chunks = [];
     this.size = 0;
@@ -16,7 +19,8 @@ class RingBuffer {
     }
     if (this.size > this.limit) {
       const only = this.chunks[0];
-      this.chunks[0] = only.subarray(only.length - this.limit);
+      // 必须拷贝：subarray 只是视图，会让超大父 ArrayBuffer 一直驻留内存
+      this.chunks[0] = Buffer.from(only.subarray(only.length - this.limit));
       this.size = this.limit;
     }
   }
