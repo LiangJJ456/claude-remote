@@ -2,6 +2,10 @@
   "name": "claude-remote-host",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=7.0.0"
+  },
   "scripts": {
     "start": "node src/index.js",
     "test": "node --test test/"
