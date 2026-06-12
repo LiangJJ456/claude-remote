@@ -88,3 +88,71 @@ test('create 失败（命令不存在）回 error 且服务不崩', async () => 
   c.ws.close();
   badServer.close();
 });
+
+test('create → attach → input → output 全流程', async () => {
+  const c = await authedClient(port, 'test-token');
+  c.send({ type: 'create', cwd: os.tmpdir() });
+  const { sessionId } = await c.next((m) => m.type === 'created');
+  c.send({ type: 'attach', sessionId, cols: 100, rows: 30 });
+  c.send({ type: 'input', sessionId, data: Buffer.from('Write-Output ping123\r').toString('base64') });
+  let acc = '';
+  while (!acc.includes('ping123')) {
+    const m = await c.next((x) => x.type === 'output' && x.sessionId === sessionId);
+    acc += Buffer.from(m.data, 'base64').toString('utf8');
+  }
+  manager.kill(sessionId);
+  c.ws.close();
+});
+
+test('第二个客户端附身能收到缓冲回放', async () => {
+  const c1 = await authedClient(port, 'test-token');
+  c1.send({ type: 'create', cwd: os.tmpdir() });
+  const { sessionId } = await c1.next((m) => m.type === 'created');
+  c1.send({ type: 'attach', sessionId, cols: 100, rows: 30 });
+  c1.send({ type: 'input', sessionId, data: Buffer.from('Write-Output replay456\r').toString('base64') });
+  let acc = '';
+  while (!acc.includes('replay456')) {
+    const m = await c1.next((x) => x.type === 'output' && x.sessionId === sessionId);
+    acc += Buffer.from(m.data, 'base64').toString('utf8');
+  }
+  const c2 = await authedClient(port, 'test-token');
+  c2.send({ type: 'attach', sessionId, cols: 100, rows: 30 });
+  const replay = await c2.next((m) => m.type === 'output' && m.sessionId === sessionId);
+  assert.ok(Buffer.from(replay.data, 'base64').toString('utf8').includes('replay456'));
+  manager.kill(sessionId);
+  c1.ws.close();
+  c2.ws.close();
+});
+
+test('detach 后不再收到该会话输出', async () => {
+  const c = await authedClient(port, 'test-token');
+  c.send({ type: 'create', cwd: os.tmpdir() });
+  const { sessionId } = await c.next((m) => m.type === 'created');
+  c.send({ type: 'attach', sessionId, cols: 100, rows: 30 });
+  await c.next((m) => m.type === 'output' && m.sessionId === sessionId);
+  c.send({ type: 'detach', sessionId });
+  c.send({ type: 'input', sessionId, data: Buffer.from('Write-Output after789\r').toString('base64') });
+  await assert.rejects(
+    c.next((m) => m.type === 'output' && m.sessionId === sessionId, 3000),
+    /超时/
+  );
+  manager.kill(sessionId);
+  c.ws.close();
+});
+
+test('kill 后广播 session_exited 事件', async () => {
+  const c = await authedClient(port, 'test-token');
+  c.send({ type: 'create', cwd: os.tmpdir() });
+  const { sessionId } = await c.next((m) => m.type === 'created');
+  c.send({ type: 'kill', sessionId });
+  await c.next((m) => m.type === 'event' && m.sessionId === sessionId && m.kind === 'session_exited');
+  c.ws.close();
+});
+
+test('attach 不存在的会话返回 error', async () => {
+  const c = await authedClient(port, 'test-token');
+  c.send({ type: 'attach', sessionId: 'nope', cols: 80, rows: 24 });
+  const err = await c.next((m) => m.type === 'error');
+  assert.match(err.message, /不存在/);
+  c.ws.close();
+});

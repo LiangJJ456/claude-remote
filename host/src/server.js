@@ -74,6 +74,41 @@ function createApp({ manager, config }) {
           broadcastSessions();
           break;
         }
+        case 'attach': {
+          if (!session) return send(ws, { type: 'error', message: '会话不存在' });
+          const old = attached.get(session.id);
+          if (old) {
+            session.off('data', old);
+            attached.delete(session.id);
+          }
+          if (msg.cols && msg.rows) session.resize(msg.cols, msg.rows);
+          send(ws, {
+            type: 'output',
+            sessionId: session.id,
+            data: session.buffer.snapshot().toString('base64'),
+          });
+          const handler = (buf) =>
+            send(ws, { type: 'output', sessionId: session.id, data: buf.toString('base64') });
+          session.on('data', handler);
+          attached.set(session.id, handler);
+          break;
+        }
+        case 'input':
+          if (session) session.write(Buffer.from(msg.data, 'base64').toString('utf8'));
+          break;
+        case 'resize':
+          if (session) session.resize(msg.cols, msg.rows);
+          break;
+        case 'detach': {
+          const handler = attached.get(msg.sessionId);
+          if (handler && session) session.off('data', handler);
+          attached.delete(msg.sessionId);
+          break;
+        }
+        case 'kill':
+          manager.kill(msg.sessionId);
+          broadcastSessions();
+          break;
         default:
           send(ws, { type: 'error', message: `未知消息类型: ${msg.type}` });
       }
