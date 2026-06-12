@@ -5,6 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { SessionManager } = require('../src/session-manager');
+const { waitFor } = require('./helpers');
 
 const PS = 'powershell.exe';
 const PS_ARGS = ['-NoLogo', '-NoProfile'];
@@ -45,14 +46,7 @@ test('会话状态变化触发 session-state 事件', async () => {
   m.on('session-state', (s) => events.push(s && s.state));
   const s = m.create({ cwd: os.tmpdir() });
   m.kill(s.id);
-  await new Promise((r) => {
-    const timer = setInterval(() => {
-      if (events.includes('exited')) {
-        clearInterval(timer);
-        r();
-      }
-    }, 50);
-  });
+  await waitFor(() => events.includes('exited'));
   assert.ok(events.includes('exited'));
 });
 

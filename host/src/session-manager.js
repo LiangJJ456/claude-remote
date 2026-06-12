@@ -11,6 +11,7 @@ class SessionManager extends EventEmitter {
     this.command = command;
     this.args = args;
     this.bufferLimit = bufferLimit;
+    // exited 会话有意保留在 Map 中（保留最后画面供查看/回放）；单用户宿主内存可接受
     this.sessions = new Map();
     this.tombstones = this.loadOrphans();
   }
@@ -33,7 +34,10 @@ class SessionManager extends EventEmitter {
       .filter((s) => s.state !== 'exited')
       .map((s) => s.info());
     fs.mkdirSync(this.dataDir, { recursive: true });
-    fs.writeFileSync(this.persistFile, JSON.stringify(live, null, 2));
+    // 先写临时文件再原子替换，避免崩溃时半写损坏 sessions.json
+    const tmp = this.persistFile + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(live, null, 2));
+    fs.renameSync(tmp, this.persistFile);
   }
 
   create({ cwd, name }) {
@@ -68,6 +72,7 @@ class SessionManager extends EventEmitter {
       session.kill();
       return;
     }
+    // tombstone 删除只改内存：sessions.json 只存活会话，tombstone 本就不在其中，无需落盘
     this.tombstones = this.tombstones.filter((t) => t.id !== id);
     this.emit('session-state', null);
   }
