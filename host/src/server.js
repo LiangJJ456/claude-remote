@@ -12,7 +12,7 @@ const MIME = {
 };
 
 function createApp({ manager, config }) {
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
   const authed = new Set();
 
   function send(ws, msg) {
@@ -150,7 +150,34 @@ function createApp({ manager, config }) {
   }
 
   function handleRequest(req, res) {
+    if (req.method === 'POST' && req.url === '/hook') return handleHook(req, res);
     serveStatic(req, res);
+  }
+
+  function handleHook(req, res) {
+    const remote = req.socket.remoteAddress;
+    if (remote !== '127.0.0.1' && remote !== '::1' && remote !== '::ffff:127.0.0.1') {
+      res.writeHead(403);
+      return res.end();
+    }
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+      try {
+        const { sessionId, kind } = JSON.parse(body);
+        const session = manager.get(sessionId);
+        if (session) {
+          if (kind === 'stop') session.setState('waiting');
+          broadcastEvent(sessionId, kind);
+          broadcastSessions();
+        }
+        res.writeHead(204);
+        res.end();
+      } catch {
+        res.writeHead(400);
+        res.end();
+      }
+    });
   }
 
   function listen(address, port) {

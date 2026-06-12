@@ -169,3 +169,45 @@ test('畸形消息不会搞挂服务（input 缺 data、resize 传垃圾）', as
   manager.kill(sessionId);
   c.ws.close();
 });
+
+test('hook 上报 stop：状态变 waiting 并广播事件', async () => {
+  const c = await authedClient(port, 'test-token');
+  c.send({ type: 'create', cwd: os.tmpdir() });
+  const { sessionId } = await c.next((m) => m.type === 'created');
+  const res = await fetch(`http://127.0.0.1:${port}/hook`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ sessionId, kind: 'stop' }),
+  });
+  assert.strictEqual(res.status, 204);
+  await c.next((m) => m.type === 'event' && m.sessionId === sessionId && m.kind === 'stop');
+  const list = await c.next(
+    (m) =>
+      m.type === 'sessions' &&
+      m.sessions.some((s) => s.id === sessionId && s.state === 'waiting')
+  );
+  assert.ok(list);
+  manager.kill(sessionId);
+  c.ws.close();
+});
+
+test('hook 上报 permission_request 原样广播', async () => {
+  const c = await authedClient(port, 'test-token');
+  c.send({ type: 'create', cwd: os.tmpdir() });
+  const { sessionId } = await c.next((m) => m.type === 'created');
+  await fetch(`http://127.0.0.1:${port}/hook`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ sessionId, kind: 'permission_request' }),
+  });
+  await c.next(
+    (m) => m.type === 'event' && m.sessionId === sessionId && m.kind === 'permission_request'
+  );
+  manager.kill(sessionId);
+  c.ws.close();
+});
+
+test('hook 收到非法 JSON 返回 400', async () => {
+  const res = await fetch(`http://127.0.0.1:${port}/hook`, { method: 'POST', body: 'not-json' });
+  assert.strictEqual(res.status, 400);
+});
