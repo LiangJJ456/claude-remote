@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Claude Remote</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+<style>
+  body { margin: 0; background: #1e1e1e; color: #ddd; font-family: sans-serif; }
+  #list-view { padding: 12px; }
+  #new-session { background: #3a6ea5; color: #fff; border: 0; border-radius: 6px; padding: 10px 16px; margin-bottom: 8px; }
+  .session { padding: 12px; margin: 6px 0; background: #2d2d2d; border-radius: 6px; cursor: pointer; display: flex; justify-content: space-between; }
+  .state-working { color: #6ec1ff; }
+  .state-waiting { color: #ffd866; }
+  .state-exited { color: #888; }
+  #term-view { display: none; height: 100vh; flex-direction: column; }
+  #term { flex: 1; min-height: 0; }
+  #bar { display: flex; gap: 6px; padding: 6px; background: #2d2d2d; flex-wrap: wrap; }
+  #bar button { background: #444; color: #eee; border: 0; border-radius: 4px; padding: 8px 14px; }
+</style>
+</head>
+<body>
+<div id="list-view">
+  <button id="new-session">新建会话</button>
+  <div id="sessions"></div>
+</div>
+<div id="term-view">
+  <div id="term"></div>
+  <div id="bar">
+    <button data-key="back">← 列表</button>
+    <button data-key="enter">回车</button>
+    <button data-key="esc">ESC</button>
+    <button data-key="up">↑</button>
+    <button data-key="down">↓</button>
+    <button data-key="1">1</button>
+    <button data-key="2">2</button>
+    <button data-key="3">3</button>
+  </div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
