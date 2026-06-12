@@ -5,6 +5,11 @@ const path = require('path');
 const { WebSocketServer } = require('ws');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
+
+function isLoopback(address) {
+  return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
+}
+
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -150,26 +155,34 @@ function createApp({ manager, config }) {
   }
 
   function handleRequest(req, res) {
-    if (req.method === 'POST' && req.url === '/hook') return handleHook(req, res);
+    if (req.method === 'POST' && req.url.split('?')[0] === '/hook') return handleHook(req, res);
     serveStatic(req, res);
   }
 
   function handleHook(req, res) {
-    const remote = req.socket.remoteAddress;
-    if (remote !== '127.0.0.1' && remote !== '::1' && remote !== '::ffff:127.0.0.1') {
+    if (!isLoopback(req.socket.remoteAddress)) {
       res.writeHead(403);
       return res.end();
     }
+    const MAX_BODY = 64 * 1024;
     let body = '';
-    req.on('data', (c) => (body += c));
+    req.on('data', (c) => {
+      body += c;
+      if (Buffer.byteLength(body) > MAX_BODY) req.destroy();
+    });
     req.on('end', () => {
       try {
         const { sessionId, kind } = JSON.parse(body);
+        if (typeof sessionId !== 'string' || typeof kind !== 'string') {
+          res.writeHead(400);
+          return res.end();
+        }
         const session = manager.get(sessionId);
         if (session) {
-          if (kind === 'stop') session.setState('waiting');
+          // event 先于状态变化广播；stop 的 setState 会经 manager 监听器触发唯一一次 sessions 广播
           broadcastEvent(sessionId, kind);
-          broadcastSessions();
+          if (kind === 'stop') session.setState('waiting');
+          else broadcastSessions();
         }
         res.writeHead(204);
         res.end();
@@ -191,4 +204,4 @@ function createApp({ manager, config }) {
   return { listen, wss };
 }
 
-module.exports = { createApp };
+module.exports = { createApp, isLoopback };

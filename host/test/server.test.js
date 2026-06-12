@@ -5,7 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { SessionManager } = require('../src/session-manager');
-const { createApp } = require('../src/server');
+const { createApp, isLoopback } = require('../src/server');
 const { TestClient, authedClient } = require('./ws-helper');
 
 const PS_ARGS = ['-NoLogo', '-NoProfile'];
@@ -209,5 +209,22 @@ test('hook 上报 permission_request 原样广播', async () => {
 
 test('hook 收到非法 JSON 返回 400', async () => {
   const res = await fetch(`http://127.0.0.1:${port}/hook`, { method: 'POST', body: 'not-json' });
+  assert.strictEqual(res.status, 400);
+});
+
+test('isLoopback 判定三种回环形式', () => {
+  assert.ok(isLoopback('127.0.0.1'));
+  assert.ok(isLoopback('::1'));
+  assert.ok(isLoopback('::ffff:127.0.0.1'));
+  assert.ok(!isLoopback('100.80.1.2'));
+  assert.ok(!isLoopback('192.168.1.5'));
+});
+
+test('hook 字段类型不对返回 400', async () => {
+  const res = await fetch(`http://127.0.0.1:${port}/hook`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ sessionId: 'x', kind: null }),
+  });
   assert.strictEqual(res.status, 400);
 });
