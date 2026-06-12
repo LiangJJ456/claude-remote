@@ -59,58 +59,66 @@ function createApp({ manager, config }) {
       }
 
       const session = msg.sessionId ? manager.get(msg.sessionId) : null;
-      switch (msg.type) {
-        case 'list':
-          send(ws, { type: 'sessions', sessions: manager.list() });
-          break;
-        case 'create': {
-          let s;
-          try {
-            s = manager.create({ cwd: msg.cwd, name: msg.name });
-          } catch (e) {
-            return send(ws, { type: 'error', message: `创建会话失败: ${e.message}` });
+      try {
+        switch (msg.type) {
+          case 'list':
+            send(ws, { type: 'sessions', sessions: manager.list() });
+            break;
+          case 'create': {
+            let s;
+            try {
+              s = manager.create({ cwd: msg.cwd, name: msg.name });
+            } catch (e) {
+              return send(ws, { type: 'error', message: `创建会话失败: ${e.message}` });
+            }
+            send(ws, { type: 'created', sessionId: s.id });
+            broadcastSessions();
+            break;
           }
-          send(ws, { type: 'created', sessionId: s.id });
-          broadcastSessions();
-          break;
-        }
-        case 'attach': {
-          if (!session) return send(ws, { type: 'error', message: '会话不存在' });
-          const old = attached.get(session.id);
-          if (old) {
-            session.off('data', old);
-            attached.delete(session.id);
+          case 'attach': {
+            if (!session) return send(ws, { type: 'error', message: '会话不存在' });
+            const old = attached.get(session.id);
+            if (old) {
+              session.off('data', old);
+              attached.delete(session.id);
+            }
+            if (Number.isInteger(msg.cols) && Number.isInteger(msg.rows) && msg.cols > 0 && msg.rows > 0) session.resize(msg.cols, msg.rows);
+            send(ws, {
+              type: 'output',
+              sessionId: session.id,
+              data: session.buffer.snapshot().toString('base64'),
+            });
+            const handler = (buf) =>
+              send(ws, { type: 'output', sessionId: session.id, data: buf.toString('base64') });
+            session.on('data', handler);
+            attached.set(session.id, handler);
+            break;
           }
-          if (msg.cols && msg.rows) session.resize(msg.cols, msg.rows);
-          send(ws, {
-            type: 'output',
-            sessionId: session.id,
-            data: session.buffer.snapshot().toString('base64'),
-          });
-          const handler = (buf) =>
-            send(ws, { type: 'output', sessionId: session.id, data: buf.toString('base64') });
-          session.on('data', handler);
-          attached.set(session.id, handler);
-          break;
+          case 'input':
+            if (session && typeof msg.data === 'string') {
+              session.write(Buffer.from(msg.data, 'base64').toString('utf8'));
+            }
+            break;
+          case 'resize':
+            if (session && Number.isInteger(msg.cols) && Number.isInteger(msg.rows) && msg.cols > 0 && msg.rows > 0) {
+              session.resize(msg.cols, msg.rows);
+            }
+            break;
+          case 'detach': {
+            const handler = attached.get(msg.sessionId);
+            if (handler && session) session.off('data', handler);
+            attached.delete(msg.sessionId);
+            break;
+          }
+          case 'kill':
+            manager.kill(msg.sessionId);
+            broadcastSessions();
+            break;
+          default:
+            send(ws, { type: 'error', message: `未知消息类型: ${msg.type}` });
         }
-        case 'input':
-          if (session) session.write(Buffer.from(msg.data, 'base64').toString('utf8'));
-          break;
-        case 'resize':
-          if (session) session.resize(msg.cols, msg.rows);
-          break;
-        case 'detach': {
-          const handler = attached.get(msg.sessionId);
-          if (handler && session) session.off('data', handler);
-          attached.delete(msg.sessionId);
-          break;
-        }
-        case 'kill':
-          manager.kill(msg.sessionId);
-          broadcastSessions();
-          break;
-        default:
-          send(ws, { type: 'error', message: `未知消息类型: ${msg.type}` });
+      } catch (e) {
+        send(ws, { type: 'error', message: '处理消息失败: ' + e.message });
       }
     });
 

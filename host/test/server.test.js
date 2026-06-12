@@ -156,3 +156,16 @@ test('attach 不存在的会话返回 error', async () => {
   assert.match(err.message, /不存在/);
   c.ws.close();
 });
+
+test('畸形消息不会搞挂服务（input 缺 data、resize 传垃圾）', async () => {
+  const c = await authedClient(port, 'test-token');
+  c.send({ type: 'create', cwd: os.tmpdir() });
+  const { sessionId } = await c.next((m) => m.type === 'created');
+  c.send({ type: 'input', sessionId });
+  c.send({ type: 'resize', sessionId, cols: 'abc', rows: null });
+  c.send({ type: 'list' });
+  const msg = await c.next((m) => m.type === 'sessions');
+  assert.ok(Array.isArray(msg.sessions));
+  manager.kill(sessionId);
+  c.ws.close();
+});
