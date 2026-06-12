@@ -23,4 +23,21 @@ test('已有配置文件中的自定义值生效', () => {
   const cfg = loadConfig(dir);
   assert.strictEqual(cfg.port, 9999);
   assert.strictEqual(cfg.claudeCommand, 'claude');
+  assert.strictEqual(cfg.token, 'x');
+});
+
+test('config.json 缺 token 时自动生成并写回', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-config-'));
+  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ port: 1234 }));
+  const cfg = loadConfig(dir);
+  assert.match(cfg.token, /^[0-9a-f]{64}$/);
+  assert.strictEqual(cfg.port, 1234);
+  const onDisk = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8'));
+  assert.strictEqual(onDisk.token, cfg.token);
+});
+
+test('损坏的 config.json 报错包含文件路径', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-config-'));
+  fs.writeFileSync(path.join(dir, 'config.json'), 'not-json{');
+  assert.throws(() => loadConfig(dir), /config file/);
 });

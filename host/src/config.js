@@ -18,7 +18,18 @@ function loadConfig(dataDir) {
     fs.writeFileSync(file, JSON.stringify(cfg, null, 2));
     return cfg;
   }
-  return { ...DEFAULTS, ...JSON.parse(fs.readFileSync(file, 'utf8')) };
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (e) {
+    throw new Error(`Failed to parse config file ${file}: ${e.message}`);
+  }
+  const cfg = { ...DEFAULTS, ...parsed };
+  if (typeof cfg.token !== 'string' || cfg.token.length === 0) {
+    cfg.token = crypto.randomBytes(32).toString('hex');
+    fs.writeFileSync(file, JSON.stringify(cfg, null, 2));
+  }
+  return cfg;
 }
 
 module.exports = { loadConfig };
