@@ -82,16 +82,20 @@ function createApp({ manager, config }) {
               session.off('data', old);
               attached.delete(session.id);
             }
-            if (Number.isInteger(msg.cols) && Number.isInteger(msg.rows) && msg.cols > 0 && msg.rows > 0) session.resize(msg.cols, msg.rows);
+            if (Number.isInteger(msg.cols) && Number.isInteger(msg.rows) && msg.cols > 0 && msg.rows > 0) {
+              session.resize(msg.cols, msg.rows);
+            }
+            // 先挂实时流 handler 再发快照：两步在同一同步块内，PTY 数据事件不可能插入其间，
+            // 但显式的注册先行让顺序语义不依赖单线程时序推理
+            const handler = (buf) =>
+              send(ws, { type: 'output', sessionId: session.id, data: buf.toString('base64') });
+            session.on('data', handler);
+            attached.set(session.id, handler);
             send(ws, {
               type: 'output',
               sessionId: session.id,
               data: session.buffer.snapshot().toString('base64'),
             });
-            const handler = (buf) =>
-              send(ws, { type: 'output', sessionId: session.id, data: buf.toString('base64') });
-            session.on('data', handler);
-            attached.set(session.id, handler);
             break;
           }
           case 'input':
@@ -106,6 +110,7 @@ function createApp({ manager, config }) {
             break;
           case 'detach': {
             const handler = attached.get(msg.sessionId);
+            // session 已不在 manager 中时无需 off：其 PTY 已死，handler 不会再被触发
             if (handler && session) session.off('data', handler);
             attached.delete(msg.sessionId);
             break;
@@ -118,6 +123,7 @@ function createApp({ manager, config }) {
             send(ws, { type: 'error', message: `未知消息类型: ${msg.type}` });
         }
       } catch (e) {
+        console.error('[server] 处理消息异常:', e);
         send(ws, { type: 'error', message: '处理消息失败: ' + e.message });
       }
     });
