@@ -53,3 +53,17 @@ test('info 返回会话摘要', async () => {
   assert.ok(info.id && info.cwd && info.createdAt);
   s.kill();
 });
+
+test('cwd 为盘符根时 name 兜底为 cwd', async () => {
+  const s = new Session({ command: PS, args: [...PS_ARGS, '-Command', 'exit'], cwd: 'C:\\' });
+  assert.strictEqual(s.name, 'C:\\');
+  await waitFor(() => s.state === 'exited');
+});
+
+test('kill 后再 write 不抛错', async () => {
+  const s = new Session({ command: PS, args: PS_ARGS, cwd: os.tmpdir() });
+  s.kill();
+  await waitFor(() => s.state === 'exited');
+  s.write('anything\r');
+  assert.strictEqual(s.state, 'exited');
+});

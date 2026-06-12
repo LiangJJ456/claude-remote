@@ -10,7 +10,7 @@ class Session extends EventEmitter {
     super();
     this.setMaxListeners(100);
     this.id = crypto.randomUUID();
-    this.name = name || path.basename(cwd);
+    this.name = name || path.basename(cwd) || cwd;
     this.cwd = cwd;
     this.createdAt = new Date().toISOString();
     this.state = 'working';
@@ -25,7 +25,11 @@ class Session extends EventEmitter {
     this.pty.onData((data) => {
       const buf = Buffer.from(data, 'utf8');
       this.buffer.push(buf);
-      this.emit('data', buf);
+      try {
+        this.emit('data', buf);
+      } catch (e) {
+        console.error('session data listener error:', e);
+      }
     });
     this.pty.onExit(() => this.setState('exited'));
   }
@@ -38,7 +42,13 @@ class Session extends EventEmitter {
 
   write(data) {
     if (this.state === 'exited') return;
-    this.pty.write(data);
+    try {
+      this.pty.write(data);
+    } catch {
+      // PTY 已死但 onExit 尚未触发：直接进入终态
+      this.setState('exited');
+      return;
+    }
     this.setState('working');
   }
 
