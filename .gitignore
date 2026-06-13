@@ -3,6 +3,8 @@ host/data/
 app/.gradle/
 app/build/
 app/app/build/
+app/terminal-emulator/build/
+app/terminal-view/build/
 app/local.properties
 app/.idea/
 .gradle/

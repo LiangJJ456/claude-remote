@@ -7,3 +7,5 @@ dependencyResolutionManagement {
 }
 rootProject.name = "ClaudeRemote"
 include(":app")
+include(":terminal-emulator")
+include(":terminal-view")
