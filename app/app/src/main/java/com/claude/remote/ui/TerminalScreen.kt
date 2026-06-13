@@ -37,7 +37,7 @@ fun TerminalScreen(
     sessionId: String,
     incoming: Flow<HostMsg>,
     send: (ClientMsg) -> Unit,
-    fontSizePx: Int = 32,
+    fontSizePx: Int = 20, // 较小默认值以容纳更多列（Claude 状态行 weekly 等需要足够宽度；可捏合缩放）
 ) {
     // 用 holder 在 AndroidView factory 与 effect 之间共享 view/session 引用
     val holder = rememberTerminalHolder()
@@ -66,7 +66,8 @@ fun TerminalScreen(
                 }
 
                 view.setTerminalViewClient(MinimalViewClient(
-                    fontSizePx = fontSizePx,
+                    baseFontPx = fontSizePx,
+                    onSetFontSize = { px -> view.setTextSize(px) },
                     onEmulatorReady = {
                         // onEmulatorSet 在尺寸变化时都会触发（含键盘弹出/收起导致的高度变化）。
                         // 首次：附身（回放+实时流）；之后：把新尺寸同步给宿主，否则 claude 按旧尺寸
@@ -151,11 +152,18 @@ private class NoopSessionClient(val onScreenUpdate: () -> Unit) : TerminalSessio
 
 /** TerminalViewClient 最小实现：按键交给 view 默认处理（写入 session），无外部修饰键。 */
 private class MinimalViewClient(
-    val fontSizePx: Int,
+    val baseFontPx: Int,
+    val onSetFontSize: (Int) -> Unit,
     val onEmulatorReady: () -> Unit,
     val onTap: () -> Unit,
 ) : TerminalViewClient {
-    override fun onScale(scale: Float): Float = fontSizePx.toFloat() // 禁用捏合缩放
+    // 捏合缩放：scale 为相对基准字号的累计因子。算出新字号、应用（触发 updateSize→Resize 同步），
+    // 返回钳制后的因子。字号范围 12–40px。
+    override fun onScale(scale: Float): Float {
+        val newSize = (baseFontPx * scale).toInt().coerceIn(12, 40)
+        onSetFontSize(newSize)
+        return newSize.toFloat() / baseFontPx
+    }
     override fun onSingleTapUp(e: MotionEvent?) { onTap() } // 点击终端弹出软键盘
     override fun shouldBackButtonBeMappedToEscape(): Boolean = false
     override fun shouldEnforceCharBasedInput(): Boolean = true
