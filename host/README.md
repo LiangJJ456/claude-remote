@@ -1,0 +1,34 @@
+# Claude Remote 会话宿主
+
+托管 Claude Code 会话，让电脑终端 / 浏览器 / 手机 app 随时附身操作。
+设计文档见 `../docs/superpowers/specs/2026-06-12-claude-remote-app-design.md`。
+
+## 启动
+
+    cd host
+    npm install
+    npm start            # 前台运行
+    .\register-autostart.ps1   # 注册开机自启（守护循环，崩溃自动重启）
+
+首次启动会生成 `data/config.json`（端口、token、claude 命令路径，可改）。
+
+**Windows 注意**：`claudeCommand` 默认值 `claude` 无法被 ConPTY 直接启动（claude 在 PATH 里通常是 .ps1/.cmd 包装）。请把 `data/config.json` 的 `claudeCommand` 改为 claude 的 .exe 完整路径，例如：
+`C:\\nvm4w\\nodejs\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe`
+（用 `(Get-Command claude).Source` 找到 claude 安装位置后定位同目录或 node_modules 下的 claude.exe。）
+
+## 使用
+
+- 电脑浏览器 / 手机（连 Tailscale）：打开 `http://<IP>:8787`，输入 token
+- 终端：`bin\cc.ps1`（建议加 PATH 或设别名）在当前目录新建会话；Ctrl+Q 离开（会话不死）
+- Hook 接入：见 `~/.claude/settings.json` 的 Stop / Notification hooks，
+  只在存在 CC_HOST_SESSION_ID 环境变量（即宿主托管的会话）时上报
+
+## 测试
+
+    npm test
+
+## 安全
+
+- 只监听 127.0.0.1 和 Tailscale 网卡（100.64.0.0/10），绝不监听 0.0.0.0
+- /hook 端点只接受 loopback 来源
+- WebSocket 需 token 鉴权（data/config.json）
