@@ -272,7 +272,7 @@ public final class TerminalSession extends TerminalOutput {
 
     /** Finish this terminal session by sending SIGKILL to the shell. */
     public void finishIfRunning() {
-        if (mRemote) { mShellPid = -1; return; }
+        if (mRemote) { synchronized (this) { mShellPid = -1; } return; }
         if (isRunning()) {
             try {
                 Os.kill(mShellPid, OsConstants.SIGKILL);

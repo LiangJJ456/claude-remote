@@ -1,8 +1,10 @@
 package com.claude.remote.ui
 
+import android.content.Context
 import android.util.Log
 import android.view.KeyEvent
 import android.view.MotionEvent
+import android.view.inputmethod.InputMethodManager
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
@@ -50,6 +52,12 @@ fun TerminalScreen(
                 view.isFocusable = true
                 view.isFocusableInTouchMode = true
 
+                val imm = ctx.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+                val showKeyboard = {
+                    view.requestFocus()
+                    imm.showSoftInput(view, InputMethodManager.SHOW_IMPLICIT)
+                }
+
                 // 用户输入 → 经 RemoteInput 回调 → 发往宿主
                 val session = TerminalSession(
                     NoopSessionClient { holder.view?.onScreenUpdated() },
@@ -57,19 +65,23 @@ fun TerminalScreen(
                     send(TerminalCodec.encodeInput(sessionId, data, offset, count))
                 }
 
-                view.setTerminalViewClient(MinimalViewClient(fontSizePx) {
-                    // onEmulatorSet：emulator 就绪后，把当前尺寸告诉宿主并附身（回放+实时流）
-                    val emu = view.mEmulator
-                    if (emu != null && !holder.attached) {
-                        holder.attached = true
-                        send(ClientMsg.Attach(sessionId, emu.mColumns, emu.mRows))
-                    }
-                })
-                view.attachSession(session)
-                view.requestFocus()
+                view.setTerminalViewClient(MinimalViewClient(
+                    fontSizePx = fontSizePx,
+                    onEmulatorReady = {
+                        // onEmulatorSet：emulator 就绪后，把当前尺寸告诉宿主并附身（回放+实时流）
+                        val emu = view.mEmulator
+                        if (emu != null && !holder.attached) {
+                            holder.attached = true
+                            send(ClientMsg.Attach(sessionId, emu.mColumns, emu.mRows))
+                        }
+                    },
+                    onTap = { showKeyboard() },
+                ))
 
-                holder.view = view
+                holder.view = view          // 先赋值，再 attach（attach 会触发 onEmulatorSet 回调）
                 holder.session = session
+                view.attachSession(session)
+                showKeyboard()              // 进入终端即弹出软键盘
                 view
             },
         )
@@ -91,6 +103,7 @@ fun TerminalScreen(
         onDispose {
             send(ClientMsg.Detach(sessionId))
             holder.session?.finishIfRunning()
+            holder.attached = false
         }
     }
 }
@@ -130,9 +143,10 @@ private class NoopSessionClient(val onScreenUpdate: () -> Unit) : TerminalSessio
 private class MinimalViewClient(
     val fontSizePx: Int,
     val onEmulatorReady: () -> Unit,
+    val onTap: () -> Unit,
 ) : TerminalViewClient {
     override fun onScale(scale: Float): Float = fontSizePx.toFloat() // 禁用捏合缩放
-    override fun onSingleTapUp(e: MotionEvent?) {}
+    override fun onSingleTapUp(e: MotionEvent?) { onTap() } // 点击终端弹出软键盘
     override fun shouldBackButtonBeMappedToEscape(): Boolean = false
     override fun shouldEnforceCharBasedInput(): Boolean = true
     override fun shouldUseCtrlSpaceWorkaround(): Boolean = false

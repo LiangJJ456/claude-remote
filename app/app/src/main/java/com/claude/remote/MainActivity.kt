@@ -4,7 +4,11 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import com.claude.remote.data.Settings
@@ -33,6 +37,8 @@ class MainActivity : ComponentActivity() {
         val settings = Settings(applicationContext)
         setContent {
             AppTheme {
+              // safeDrawingPadding：内容避开状态栏/导航栏，且键盘弹出时整体上移（targetSdk35 强制 edge-to-edge）
+              Box(Modifier.fillMaxSize().safeDrawingPadding()) {
                 var screen by remember { mutableStateOf("loading") }
                 var cfgUrl by remember { mutableStateOf("") }
                 var cfgToken by remember { mutableStateOf("") }
@@ -76,6 +82,7 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }
+              }
             }
         }
     }
