@@ -7,17 +7,15 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
-import com.claude.remote.data.SessionRepository
+import com.claude.remote.data.HostEntry
 import com.claude.remote.net.ClientMsg
 import com.claude.remote.net.ConnState
-import com.claude.remote.net.HostClient
 import com.claude.remote.net.HostMsg
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 
 /**
- * 前台服务：持有到宿主的 WebSocket 长连接，使 app 退后台仍保持连接并能弹通知。
- * Activity 绑定本服务获取会话流/连接状态/下行流，并经此发送消息。
+ * 前台服务：为每台已配置电脑维护一个 [HostConnection]（同时连接所有），使 app 退后台仍保持连接并能弹通知。
+ * Activity 绑定本服务，按 hostId 获取各电脑的会话流/连接状态/下行流并发送消息。
  */
 class ConnectionService : Service() {
 
@@ -26,22 +24,11 @@ class ConnectionService : Service() {
     private val binder = LocalBinder()
     private val main = Handler(Looper.getMainLooper())
 
-    val repo = SessionRepository()
-    val incoming = MutableSharedFlow<HostMsg>(extraBufferCapacity = 512)
-    val connState = MutableStateFlow(ConnState.DISCONNECTED)
+    private val connections = LinkedHashMap<String, HostConnection>()
+    /** 当前电脑列表（供 UI 观察增删）。 */
+    val hosts = MutableStateFlow<List<HostEntry>>(emptyList())
 
-    private var client: HostClient? = null
     private var started = false
-
-    // 自动重连状态
-    private var url: String? = null
-    private var token: String? = null
-    private var wantConnected = false
-    private var reconnectAttempt = 0
-    private val reconnectRunnable = Runnable {
-        val u = url; val t = token
-        if (wantConnected && u != null && t != null) connect(u, t)
-    }
 
     override fun onBind(intent: Intent?): IBinder = binder
 
@@ -50,26 +37,40 @@ class ConnectionService : Service() {
         Notifications.ensureChannels(this)
     }
 
-    /** 幂等启动前台 + 连接。Activity 拿到 config 后调用。 */
-    fun start(url: String, token: String) {
-        this.url = url; this.token = token; this.wantConnected = true
+    fun connection(hostId: String): HostConnection? = connections[hostId]
+
+    /**
+     * 同步电脑列表：新增的开连接，删除的断开，已存在的若 url/token 变了则重连。幂等。
+     */
+    fun setHosts(list: List<HostEntry>) {
         if (!started) {
-            startForegroundCompat("正在连接 $url")
+            startForegroundCompat("正在连接…")
             started = true
         }
-        reconnectAttempt = 0
-        connect(url, token)
+        val incomingIds = list.map { it.id }.toSet()
+        // 移除已删除的
+        connections.keys.filter { it !in incomingIds }.forEach { id ->
+            connections.remove(id)?.stop()
+        }
+        // 新增或更新
+        for (entry in list) {
+            val existing = connections[entry.id]
+            if (existing == null) {
+                val conn = HostConnection(entry, main, ::onHostEvent, ::updateAggregateNotification)
+                connections[entry.id] = conn
+                conn.start()
+            } else if (existing.entry.url != entry.url || existing.entry.token != entry.token) {
+                existing.stop()
+                val conn = HostConnection(entry, main, ::onHostEvent, ::updateAggregateNotification)
+                connections[entry.id] = conn
+                conn.start()
+            }
+        }
+        hosts.value = list
+        updateAggregateNotification()
     }
 
-    /** 断线后按指数退避安排重连（1,2,4,8,16,封顶 30 秒）。 */
-    private fun scheduleReconnect() {
-        if (!wantConnected) return
-        main.removeCallbacks(reconnectRunnable)
-        val delay = minOf(30_000L, 1000L * (1L shl minOf(reconnectAttempt, 5)))
-        reconnectAttempt++
-        updateOngoing("已断开，${delay / 1000}s 后重连…")
-        main.postDelayed(reconnectRunnable, delay)
-    }
+    fun send(hostId: String, msg: ClientMsg) = connections[hostId]?.send(msg)
 
     private fun startForegroundCompat(text: String) {
         val n = Notifications.ongoing(this, text)
@@ -83,58 +84,28 @@ class ConnectionService : Service() {
         }
     }
 
-    private fun updateOngoing(text: String) {
+    private fun updateAggregateNotification() {
+        val total = connections.size
+        val connected = connections.values.count { it.connState.value == ConnState.CONNECTED }
         androidx.core.app.NotificationManagerCompat.from(this)
-            .notify(Notifications.ONGOING_ID, Notifications.ongoing(this, text))
+            .notify(Notifications.ONGOING_ID, Notifications.ongoing(this, "$connected/$total 台已连接"))
     }
 
-    fun send(msg: ClientMsg) = client?.send(msg)
-
-    private fun connect(url: String, token: String) {
-        client?.close()
-        client = HostClient(
-            url = url, token = token,
-            onMessage = { msg ->
-                main.post {
-                    repo.onHostMsg(msg)
-                    incoming.tryEmit(msg)
-                    when (msg) {
-                        is HostMsg.AuthOk -> client?.send(ClientMsg.ListSessions)
-                        is HostMsg.Created -> client?.send(ClientMsg.ListSessions)
-                        is HostMsg.Event -> onEvent(msg)
-                        else -> {}
-                    }
-                }
-            },
-            onState = { st ->
-                main.post {
-                    connState.value = st
-                    when (st) {
-                        ConnState.CONNECTED -> { reconnectAttempt = 0; updateOngoing("已连接") }
-                        ConnState.CONNECTING -> updateOngoing("连接中…")
-                        ConnState.DISCONNECTED -> scheduleReconnect() // 真断线 → 自动重连
-                    }
-                }
-            },
-        )
-        client!!.connect()
-    }
-
-    /** 会话事件 → 本地通知。会话名取自当前列表，缺省用 id 前 6 位。 */
-    private fun onEvent(ev: HostMsg.Event) {
-        val name = repo.sessions.value.firstOrNull { it.id == ev.sessionId }?.name
+    /** 某台电脑的会话事件 → 本地通知（带电脑名与 hostId，点击直达对应电脑的会话）。 */
+    private fun onHostEvent(conn: HostConnection, ev: HostMsg.Event) {
+        val sessionName = conn.repo.sessions.value.firstOrNull { it.id == ev.sessionId }?.name
             ?: ev.sessionId.take(6)
+        val hostName = conn.entry.name
         when (ev.kind) {
-            "stop" -> Notifications.event(this, ev.sessionId, "会话等待输入", "「$name」已停下，点开继续")
-            "permission_request" -> Notifications.event(this, ev.sessionId, "请求授权", "「$name」需要你批准操作")
+            "stop" -> Notifications.event(this, conn.entry.id, ev.sessionId, "会话等待输入", "$hostName · 「$sessionName」已停下，点开继续")
+            "permission_request" -> Notifications.event(this, conn.entry.id, ev.sessionId, "请求授权", "$hostName · 「$sessionName」需要你批准")
             else -> {}
         }
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        wantConnected = false
-        main.removeCallbacks(reconnectRunnable)
-        client?.close()
+        connections.values.forEach { it.stop() }
+        connections.clear()
     }
 }

@@ -18,6 +18,7 @@ object Notifications {
     const val CHANNEL_EVENT = "event"
     const val ONGOING_ID = 1
     const val EXTRA_SESSION_ID = "sessionId"
+    const val EXTRA_HOST_ID = "hostId"
 
     fun ensureChannels(ctx: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -39,29 +40,30 @@ object Notifications {
             .setContentText(text)
             .setSmallIcon(R.drawable.ic_notification)
             .setOngoing(true)
-            .setContentIntent(openAppIntent(ctx, null))
+            .setContentIntent(openAppIntent(ctx, null, null))
             .build()
 
-    /** 事件提醒（停下/请求授权）。点击直达对应会话终端页。 */
-    fun event(ctx: Context, sessionId: String, title: String, text: String) {
+    /** 事件提醒（停下/请求授权）。点击直达对应电脑的会话终端页。 */
+    fun event(ctx: Context, hostId: String, sessionId: String, title: String, text: String) {
         val n = NotificationCompat.Builder(ctx, CHANNEL_EVENT)
             .setContentTitle(title)
             .setContentText(text)
             .setSmallIcon(R.drawable.ic_notification)
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setContentIntent(openAppIntent(ctx, sessionId))
+            .setContentIntent(openAppIntent(ctx, hostId, sessionId))
             .build()
-        // 用 sessionId 的 hashCode 作为通知 id：同会话的新事件覆盖旧的
-        NotificationManagerCompat.from(ctx).notify(sessionId.hashCode(), n)
+        // 用 (host+session) 的 hashCode 作为通知 id：同会话的新事件覆盖旧的
+        NotificationManagerCompat.from(ctx).notify((hostId + sessionId).hashCode(), n)
     }
 
-    private fun openAppIntent(ctx: Context, sessionId: String?): PendingIntent {
+    private fun openAppIntent(ctx: Context, hostId: String?, sessionId: String?): PendingIntent {
         val intent = Intent(ctx, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            if (hostId != null) putExtra(EXTRA_HOST_ID, hostId)
             if (sessionId != null) putExtra(EXTRA_SESSION_ID, sessionId)
         }
-        val reqCode = sessionId?.hashCode() ?: 0
+        val reqCode = ((hostId ?: "") + (sessionId ?: "")).hashCode()
         return PendingIntent.getActivity(
             ctx, reqCode, intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,

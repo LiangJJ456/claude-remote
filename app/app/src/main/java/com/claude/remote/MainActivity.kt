@@ -19,22 +19,22 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
+import com.claude.remote.data.HostEntry
 import com.claude.remote.data.Settings
 import com.claude.remote.net.ClientMsg
 import com.claude.remote.net.ConnState
 import com.claude.remote.service.ConnectionService
 import com.claude.remote.service.Notifications
+import com.claude.remote.ui.HostEditScreen
+import com.claude.remote.ui.HostsScreen
 import com.claude.remote.ui.SessionListScreen
-import com.claude.remote.ui.SettingsScreen
-import com.claude.remote.ui.TerminalScreen
 import com.claude.remote.ui.theme.AppTheme
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private val serviceState = mutableStateOf<ConnectionService?>(null)
-    /** 通知点击带来的待打开会话 id（onCreate/onNewIntent 写入，Compose 消费）。 */
-    private val pendingOpen = mutableStateOf<String?>(null)
+    private val pendingHost = mutableStateOf<String?>(null)
+    private val pendingSession = mutableStateOf<String?>(null)
     private var bound = false
 
     private val connection = object : ServiceConnection {
@@ -46,81 +46,122 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        intent?.getStringExtra(Notifications.EXTRA_SESSION_ID)?.let { pendingOpen.value = it }
-
-        val svc = Intent(this, ConnectionService::class.java)
-        bindService(svc, connection, Context.BIND_AUTO_CREATE)
+        readNotificationExtras(intent)
+        bindService(Intent(this, ConnectionService::class.java), connection, Context.BIND_AUTO_CREATE)
         bound = true
 
         val settings = Settings(applicationContext)
         setContent {
             AppTheme {
               Box(Modifier.fillMaxSize().safeDrawingPadding()) {
-                val service = serviceState.value
-                if (service == null) {
-                    return@Box // 等待服务绑定
-                }
+                val service = serviceState.value ?: return@Box
 
-                // Android 13+ 通知权限
                 val notifPermission = rememberLauncherForActivityResult(
                     ActivityResultContracts.RequestPermission()
                 ) {}
                 LaunchedEffect(Unit) {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
                         notifPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                }
+
+                val hosts by service.hosts.collectAsStateWithLifecycle()
+                var screen by remember { mutableStateOf("loading") }
+                var selectedHostId by remember { mutableStateOf<String?>(null) }
+                var editing by remember { mutableStateOf<HostEntry?>(null) }
+                var openSessionId by remember { mutableStateOf<String?>(null) }
+
+                // 把设置里的电脑列表同步给服务（增删改 → 连接随动）
+                LaunchedEffect(Unit) {
+                    settings.hosts.collect { list ->
+                        service.setHosts(list)
+                        if (list.isEmpty()) {
+                            editing = null; screen = "editHost"
+                        } else {
+                            if (selectedHostId == null || list.none { it.id == selectedHostId }) {
+                                selectedHostId = list.first().id
+                            }
+                            if (screen == "loading") screen = "sessions"
+                        }
                     }
                 }
 
-                var screen by remember { mutableStateOf("loading") }
-                var cfgUrl by remember { mutableStateOf("") }
-                var cfgToken by remember { mutableStateOf("") }
-                var openSessionId by remember { mutableStateOf<String?>(null) }
-                val sessions by service.repo.sessions.collectAsStateWithLifecycle()
-                val conn by service.connState.collectAsStateWithLifecycle()
-
-                LaunchedEffect(Unit) {
-                    val c = settings.config.first()
-                    cfgUrl = c.url; cfgToken = c.token
-                    if (c.isConfigured) { startConnection(c.url, c.token); screen = "list" } else screen = "settings"
-                }
-
-                // 通知点击 → 跳到对应会话终端
-                LaunchedEffect(pendingOpen.value, screen) {
-                    val sid = pendingOpen.value
-                    if (sid != null && screen != "loading" && screen != "settings") {
-                        openSessionId = sid; screen = "terminal"; pendingOpen.value = null
+                // 通知点击 → 切到对应电脑并打开会话
+                LaunchedEffect(pendingHost.value, pendingSession.value, hosts) {
+                    val h = pendingHost.value; val s = pendingSession.value
+                    if (h != null && s != null && hosts.any { it.id == h }) {
+                        selectedHostId = h; openSessionId = s; screen = "terminal"
+                        pendingHost.value = null; pendingSession.value = null
                     }
                 }
 
                 when (screen) {
-                    "settings" -> SettingsScreen(cfgUrl, cfgToken) { url, token ->
-                        lifecycleScope.launch {
-                            settings.save(url, token); cfgUrl = url; cfgToken = token
-                            startConnection(url, token); screen = "list"
+                    "editHost" -> {
+                        val e = editing
+                        HostEditScreen(
+                            isNew = e == null,
+                            initialName = e?.name ?: "",
+                            initialUrl = e?.url ?: "",
+                            initialToken = e?.token ?: "",
+                            onSave = { name, url, token ->
+                                lifecycleScope.launch {
+                                    if (e == null) {
+                                        val added = settings.addHost(name, url, token)
+                                        selectedHostId = added.id
+                                    } else settings.updateHost(e.id, name, url, token)
+                                    screen = "sessions"
+                                }
+                            },
+                            onCancel = { screen = if (hosts.isEmpty()) "editHost" else "hosts" },
+                            onDelete = if (e != null) {
+                                {
+                                    lifecycleScope.launch {
+                                        settings.removeHost(e.id)
+                                        screen = "hosts"
+                                    }
+                                }
+                            } else null,
+                        )
+                    }
+                    "hosts" -> HostsScreen(
+                        hosts = hosts,
+                        connStateOf = { id -> connLabel(service.connection(id)?.connState?.value) },
+                        onEdit = { editing = it; screen = "editHost" },
+                        onAdd = { editing = null; screen = "editHost" },
+                        onBack = { screen = "sessions" },
+                    )
+                    "sessions" -> {
+                        val hid = selectedHostId
+                        val conn = hid?.let { service.connection(it) }
+                        if (hid == null || conn == null) { screen = "loading" } else {
+                            key(hid) {
+                                val sessions by conn.repo.sessions.collectAsStateWithLifecycle()
+                                val cs by conn.connState.collectAsStateWithLifecycle()
+                                SessionListScreen(
+                                    hostName = conn.entry.name,
+                                    allHosts = hosts,
+                                    onSelectHost = { selectedHostId = it },
+                                    onManageHosts = { screen = "hosts" },
+                                    sessions = sessions,
+                                    connState = connLabel(cs),
+                                    incoming = conn.incoming,
+                                    send = { conn.send(it) },
+                                    onOpen = { openSessionId = it.id; screen = "terminal" },
+                                    onNew = { cwd -> conn.send(ClientMsg.Create(cwd = cwd)) },
+                                )
+                            }
                         }
                     }
-                    "list" -> SessionListScreen(
-                        sessions = sessions,
-                        connState = when (conn) {
-                            ConnState.CONNECTED -> "已连接"
-                            ConnState.CONNECTING -> "连接中"
-                            else -> "未连接"
-                        },
-                        incoming = service.incoming,
-                        send = { service.send(it) },
-                        onOpen = { openSessionId = it.id; screen = "terminal" },
-                        onNew = { cwd -> service.send(ClientMsg.Create(cwd = cwd)) },
-                        onSettings = { screen = "settings" },
-                    )
                     "terminal" -> {
+                        val hid = selectedHostId
+                        val conn = hid?.let { service.connection(it) }
                         val sid = openSessionId
-                        if (sid == null) { screen = "list" } else {
-                            BackHandler { screen = "list" }
-                            TerminalScreen(
+                        if (conn == null || sid == null) { screen = "sessions" } else {
+                            BackHandler { screen = "sessions" }
+                            com.claude.remote.ui.TerminalScreen(
                                 sessionId = sid,
-                                incoming = service.incoming,
-                                connState = service.connState,
-                                send = { service.send(it) },
+                                incoming = conn.incoming,
+                                connState = conn.connState,
+                                send = { conn.send(it) },
                             )
                         }
                     }
@@ -132,14 +173,18 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        intent.getStringExtra(Notifications.EXTRA_SESSION_ID)?.let { pendingOpen.value = it }
+        readNotificationExtras(intent)
     }
 
-    /** 启动并前台化服务（survive 后台）+ 连接。 */
-    private fun startConnection(url: String, token: String) {
-        val svc = Intent(this, ConnectionService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(svc) else startService(svc)
-        serviceState.value?.start(url, token)
+    private fun readNotificationExtras(intent: Intent?) {
+        intent?.getStringExtra(Notifications.EXTRA_HOST_ID)?.let { pendingHost.value = it }
+        intent?.getStringExtra(Notifications.EXTRA_SESSION_ID)?.let { pendingSession.value = it }
+    }
+
+    private fun connLabel(cs: ConnState?): String = when (cs) {
+        ConnState.CONNECTED -> "已连接"
+        ConnState.CONNECTING -> "连接中"
+        else -> "未连接"
     }
 
     override fun onDestroy() {

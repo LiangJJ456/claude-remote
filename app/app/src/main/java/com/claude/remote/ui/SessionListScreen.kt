@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.claude.remote.data.HostEntry
 import com.claude.remote.data.Session
 import com.claude.remote.net.ClientMsg
 import com.claude.remote.net.HostMsg
@@ -24,20 +25,48 @@ import kotlinx.coroutines.flow.filterIsInstance
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SessionListScreen(
+    hostName: String,
+    allHosts: List<HostEntry>,
+    onSelectHost: (String) -> Unit,
+    onManageHosts: () -> Unit,
     sessions: List<Session>,
     connState: String,
     incoming: Flow<HostMsg>,
     send: (ClientMsg) -> Unit,
     onOpen: (Session) -> Unit,
     onNew: (String) -> Unit,
-    onSettings: () -> Unit,
 ) {
     var showNewDialog by remember { mutableStateOf(false) }
+    var hostMenu by remember { mutableStateOf(false) }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("会话 · $connState") }, actions = {
-            TextButton(onClick = onSettings) { Text("设置") }
-        }) },
+        topBar = {
+            TopAppBar(
+                title = {
+                    Box {
+                        Row(
+                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                            modifier = Modifier.clickable { hostMenu = true },
+                        ) {
+                            Text("$hostName · $connState  ▾", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        DropdownMenu(expanded = hostMenu, onDismissRequest = { hostMenu = false }) {
+                            for (h in allHosts) {
+                                DropdownMenuItem(
+                                    text = { Text(h.name) },
+                                    onClick = { hostMenu = false; onSelectHost(h.id) },
+                                )
+                            }
+                            HorizontalDivider()
+                            DropdownMenuItem(
+                                text = { Text("管理电脑…") },
+                                onClick = { hostMenu = false; onManageHosts() },
+                            )
+                        }
+                    }
+                },
+            )
+        },
         floatingActionButton = { FloatingActionButton(onClick = { showNewDialog = true }) { Text("+") } },
     ) { pad ->
         LazyColumn(Modifier.padding(pad).fillMaxSize()) {
