@@ -107,7 +107,7 @@ class MainActivity : ComponentActivity() {
                             else -> "未连接"
                         },
                         onOpen = { openSessionId = it.id; screen = "terminal" },
-                        onNew = { service.send(ClientMsg.Create(cwd = "C:\\Users\\galaxy\\code")) },
+                        onNew = { cwd -> service.send(ClientMsg.Create(cwd = cwd)) },
                         onSettings = { screen = "settings" },
                     )
                     "terminal" -> {
