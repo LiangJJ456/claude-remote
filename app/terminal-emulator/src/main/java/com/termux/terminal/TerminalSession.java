@@ -86,6 +86,39 @@ public final class TerminalSession extends TerminalOutput {
         this.mEnv = env;
         this.mTranscriptRows = transcriptRows;
         this.mClient = client;
+        this.mRemote = false;
+    }
+
+    // ===== Claude Remote: 远程模式（无本地进程，由 WebSocket 字节流驱动）=====
+
+    /** 远程模式下用户输入的去向：转发到 WebSocket，而非本地 pty。 */
+    public interface RemoteInput { void onInput(byte[] data, int offset, int count); }
+
+    private final boolean mRemote;
+    private RemoteInput mRemoteInput;
+    private static final int REMOTE_TRANSCRIPT_ROWS = 2000;
+
+    /**
+     * 远程会话：不创建本地进程。由 {@link #appendBytes(byte[], int)} 喂入宿主字节流，
+     * 用户输入经 remoteInput 回传给调用方（再由其发往宿主）。
+     */
+    public TerminalSession(TerminalSessionClient client, RemoteInput remoteInput) {
+        this.mShellPath = null;
+        this.mCwd = null;
+        this.mArgs = null;
+        this.mEnv = null;
+        this.mTranscriptRows = REMOTE_TRANSCRIPT_ROWS;
+        this.mClient = client;
+        this.mRemote = true;
+        this.mRemoteInput = remoteInput;
+        this.mShellPid = 1; // 标记为"运行中"，使 isRunning() 及输入路径正常
+    }
+
+    /** 远程模式：把宿主发来的字节喂给 emulator 并刷新屏幕。必须在主线程调用。 */
+    public void appendBytes(byte[] buffer, int length) {
+        if (mEmulator == null) return;
+        mEmulator.append(buffer, length);
+        notifyScreenUpdate();
     }
 
     /**
@@ -104,7 +137,7 @@ public final class TerminalSession extends TerminalOutput {
         if (mEmulator == null) {
             initializeEmulator(columns, rows, cellWidthPixels, cellHeightPixels);
         } else {
-            JNI.setPtyWindowSize(mTerminalFileDescriptor, rows, columns, cellWidthPixels, cellHeightPixels);
+            if (!mRemote) JNI.setPtyWindowSize(mTerminalFileDescriptor, rows, columns, cellWidthPixels, cellHeightPixels);
             mEmulator.resize(columns, rows, cellWidthPixels, cellHeightPixels);
         }
     }
@@ -122,6 +155,8 @@ public final class TerminalSession extends TerminalOutput {
      */
     public void initializeEmulator(int columns, int rows, int cellWidthPixels, int cellHeightPixels) {
         mEmulator = new TerminalEmulator(this, columns, rows, cellWidthPixels, cellHeightPixels, mTranscriptRows, mClient);
+
+        if (mRemote) return; // 远程模式：emulator 就绪即可，不创建本地进程与 IO 线程
 
         int[] processId = new int[1];
         mTerminalFileDescriptor = JNI.createSubprocess(mShellPath, mCwd, mArgs, mEnv, processId, rows, columns, cellWidthPixels, cellHeightPixels);
@@ -176,6 +211,10 @@ public final class TerminalSession extends TerminalOutput {
     /** Write data to the shell process. */
     @Override
     public void write(byte[] data, int offset, int count) {
+        if (mRemote) {
+            if (mRemoteInput != null) mRemoteInput.onInput(data, offset, count);
+            return;
+        }
         if (mShellPid > 0) mTerminalToProcessIOQueue.write(data, offset, count);
     }
 
@@ -233,6 +272,7 @@ public final class TerminalSession extends TerminalOutput {
 
     /** Finish this terminal session by sending SIGKILL to the shell. */
     public void finishIfRunning() {
+        if (mRemote) { mShellPid = -1; return; }
         if (isRunning()) {
             try {
                 Os.kill(mShellPid, OsConstants.SIGKILL);
