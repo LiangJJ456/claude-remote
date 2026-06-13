@@ -261,3 +261,44 @@ test('多客户端并发：c1 的 input 产生的 output 同时到达 c2', async
   c1.ws.close();
   c2.ws.close();
 });
+
+test('listdir 返回指定目录的子目录', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-ls-'));
+  fs.mkdirSync(path.join(dir, 'alpha'));
+  fs.mkdirSync(path.join(dir, 'beta'));
+  fs.writeFileSync(path.join(dir, 'afile.txt'), 'x'); // 文件不应出现
+  const c = await authedClient(port, 'test-token');
+  c.send({ type: 'listdir', path: dir });
+  const msg = await c.next((m) => m.type === 'dir');
+  assert.strictEqual(msg.path, dir);
+  assert.deepStrictEqual(msg.entries.sort(), ['alpha', 'beta']);
+  assert.ok(!msg.entries.includes('afile.txt'));
+  c.ws.close();
+});
+
+test('listdir 空 path 用主目录', async () => {
+  const c = await authedClient(port, 'test-token');
+  c.send({ type: 'listdir', path: '' });
+  const msg = await c.next((m) => m.type === 'dir');
+  assert.strictEqual(msg.path, os.homedir());
+  assert.ok(Array.isArray(msg.entries));
+  c.ws.close();
+});
+
+test('listdir 不存在目录返回空 entries 不崩', async () => {
+  const c = await authedClient(port, 'test-token');
+  c.send({ type: 'listdir', path: 'Z:\\no\\such\\dir\\xyz' });
+  const msg = await c.next((m) => m.type === 'dir');
+  assert.deepStrictEqual(msg.entries, []);
+  c.ws.close();
+});
+
+test('listdir ::drives 返回盘符根列表', async () => {
+  const c = await authedClient(port, 'test-token');
+  c.send({ type: 'listdir', path: '::drives' });
+  const msg = await c.next((m) => m.type === 'dir');
+  assert.strictEqual(msg.path, '::drives');
+  assert.ok(msg.entries.length >= 1);
+  assert.ok(msg.entries.every((e) => /^[A-Za-z]:\\$/.test(e))); // 形如 C:\
+  c.ws.close();
+});

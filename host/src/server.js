@@ -1,5 +1,6 @@
 'use strict';
 const fs = require('fs');
+const os = require('os');
 const http = require('http');
 const path = require('path');
 const { WebSocketServer } = require('ws');
@@ -124,6 +125,32 @@ function createApp({ manager, config }) {
             manager.kill(msg.sessionId);
             broadcastSessions();
             break;
+          case 'listdir': {
+            const dir = (typeof msg.path === 'string' && msg.path) ? msg.path : os.homedir();
+            // 特殊路径 "::drives"：返回所有可用盘符根（C:\、D:\…），entries 为完整盘根
+            if (dir === '::drives') {
+              const drives = [];
+              for (let c = 65; c <= 90; c++) {
+                const root = String.fromCharCode(c) + ':\\';
+                try { fs.accessSync(root); drives.push(root); } catch {}
+              }
+              send(ws, { type: 'dir', path: '::drives', parent: '', entries: drives });
+              break;
+            }
+            // 盘符根（C:\）的上一级指向磁盘列表，便于切换其它盘
+            const isDriveRoot = /^[A-Za-z]:[\\/]?$/.test(dir);
+            const parent = isDriveRoot ? '::drives' : path.dirname(dir);
+            try {
+              const entries = fs.readdirSync(dir, { withFileTypes: true })
+                .filter((d) => d.isDirectory() && !d.name.startsWith('.'))
+                .map((d) => d.name)
+                .sort((a, b) => a.localeCompare(b));
+              send(ws, { type: 'dir', path: dir, parent, entries });
+            } catch (e) {
+              send(ws, { type: 'dir', path: dir, parent, entries: [] });
+            }
+            break;
+          }
           default:
             send(ws, { type: 'error', message: `未知消息类型: ${msg.type}` });
         }

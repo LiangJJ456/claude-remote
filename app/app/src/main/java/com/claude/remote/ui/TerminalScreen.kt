@@ -1,0 +1,277 @@
+package com.claude.remote.ui
+
+import android.content.Context
+import android.util.Log
+import android.view.KeyEvent
+import android.view.MotionEvent
+import android.view.inputmethod.InputMethodManager
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import com.claude.remote.net.ClientMsg
+import com.claude.remote.net.ConnState
+import com.claude.remote.net.HostMsg
+import com.claude.remote.terminal.TerminalCodec
+import com.termux.terminal.TerminalSession
+import com.termux.terminal.TerminalSessionClient
+import com.termux.view.TerminalView
+import com.termux.view.TerminalViewClient
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.filterIsInstance
+
+private const val TAG = "ClaudeRemoteTerm"
+
+/**
+ * 终端页：AndroidView 嵌入 Termux TerminalView，附身远程会话。
+ *
+ * @param sessionId 要附身的宿主会话 id
+ * @param incoming  宿主下行消息流（MainActivity 提供，含 output/event）
+ * @param connState 连接状态流（用于断线重连后重新附身）
+ * @param send      向宿主发送 ClientMsg
+ * @param fontSizePx 终端字号（px）
+ */
+@Composable
+fun TerminalScreen(
+    sessionId: String,
+    incoming: Flow<HostMsg>,
+    connState: Flow<ConnState>,
+    send: (ClientMsg) -> Unit,
+    fontSizePx: Int = 20, // 较小默认值以容纳更多列（Claude 状态行 weekly 等需要足够宽度；可捏合缩放）
+) {
+    // 用 holder 在 AndroidView factory 与 effect 之间共享 view/session 引用
+    val holder = rememberTerminalHolder()
+
+    // 发送控制序列（快捷键栏用）：字节 → base64 → Input
+    val sendKey: (String) -> Unit = { s ->
+        val bytes = s.toByteArray(Charsets.UTF_8)
+        send(TerminalCodec.encodeInput(sessionId, bytes, 0, bytes.size))
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        AndroidView(
+            modifier = Modifier.fillMaxWidth().weight(1f),
+            factory = { ctx ->
+                val view = TerminalView(ctx, null)
+                view.setTextSize(fontSizePx)
+                // Compose AndroidView 下必须显式可聚焦，否则收不到软键盘/按键事件
+                view.isFocusable = true
+                view.isFocusableInTouchMode = true
+
+                val imm = ctx.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+                val showKeyboard = {
+                    view.requestFocus()
+                    imm.showSoftInput(view, InputMethodManager.SHOW_IMPLICIT)
+                }
+
+                // 用户输入 → 经 RemoteInput 回调 → 发往宿主
+                val session = TerminalSession(
+                    NoopSessionClient { holder.view?.onScreenUpdated() },
+                ) { data, offset, count ->
+                    send(TerminalCodec.encodeInput(sessionId, data, offset, count))
+                }
+
+                view.setTerminalViewClient(MinimalViewClient(
+                    baseFontPx = fontSizePx,
+                    onSetFontSize = { px -> view.setTextSize(px) },
+                    onEmulatorReady = {
+                        // onEmulatorSet 在尺寸变化时都会触发（含键盘弹出/收起导致的高度变化）。
+                        // 首次：附身（回放+实时流）；之后：把新尺寸同步给宿主，否则 claude 按旧尺寸
+                        // 渲染会导致画面错乱。
+                        val emu = view.mEmulator
+                        if (emu != null) {
+                            if (!holder.attached) {
+                                holder.attached = true
+                                holder.cols = emu.mColumns; holder.rows = emu.mRows
+                                send(ClientMsg.Attach(sessionId, emu.mColumns, emu.mRows))
+                            } else if (emu.mColumns != holder.cols || emu.mRows != holder.rows) {
+                                holder.cols = emu.mColumns; holder.rows = emu.mRows
+                                send(ClientMsg.Resize(sessionId, emu.mColumns, emu.mRows))
+                            }
+                        }
+                    },
+                    onTap = { showKeyboard() },
+                ))
+
+                holder.view = view          // 先赋值，再 attach（attach 会触发 onEmulatorSet 回调）
+                holder.session = session
+                view.attachSession(session)
+                showKeyboard()              // 进入终端即弹出软键盘
+                view
+            },
+        )
+        ShortcutBar(onKey = sendKey)
+    }
+
+    // 收下行：本会话的 output 喂给 emulator
+    LaunchedEffect(sessionId) {
+        incoming.filterIsInstance<HostMsg.Output>().collect { out ->
+            if (out.sessionId == sessionId) {
+                val s = holder.session ?: return@collect
+                val bytes = TerminalCodec.decodeOutput(out.dataB64)
+                s.appendBytes(bytes, bytes.size)
+            }
+        }
+    }
+
+    // 断线重连后自动重新附身：新连接上宿主无附身状态，必须重发 Attach 才能继续收输出
+    LaunchedEffect(sessionId) {
+        var wasDisconnected = false
+        connState.collect { st ->
+            when (st) {
+                ConnState.DISCONNECTED -> { wasDisconnected = true; holder.attached = false }
+                ConnState.CONNECTED -> {
+                    if (wasDisconnected) {
+                        wasDisconnected = false
+                        val emu = holder.view?.mEmulator
+                        if (emu != null) {
+                            holder.attached = true
+                            holder.cols = emu.mColumns; holder.rows = emu.mRows
+                            send(ClientMsg.Attach(sessionId, emu.mColumns, emu.mRows))
+                        }
+                    }
+                }
+                else -> {}
+            }
+        }
+    }
+
+    // 离开：通知宿主 detach（会话仍在后台），结束本地会话对象
+    DisposableEffect(sessionId) {
+        onDispose {
+            send(ClientMsg.Detach(sessionId))
+            holder.session?.finishIfRunning()
+            holder.attached = false
+        }
+    }
+}
+
+/** 底部快捷键栏：软键盘敲不出的控制键。横向可滚动。用 Char(code) 构造序列以避免转义字面量。 */
+@Composable
+private fun ShortcutBar(onKey: (String) -> Unit) {
+    val esc = Char(27).toString()
+    val keys = listOf(
+        "Esc" to esc,
+        "Tab" to Char(9).toString(),
+        "↑" to esc + "[A",
+        "↓" to esc + "[B",
+        "←" to esc + "[D",
+        "→" to esc + "[C",
+        "⏎" to Char(13).toString(),
+        "^C" to Char(3).toString(),   // 打断
+        "^D" to Char(4).toString(),   // EOF
+        "^U" to Char(21).toString(),  // 清行
+        "^L" to Char(12).toString(),  // 清屏
+    )
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color(0xFF2A2A2A))
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 4.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        for ((label, seq) in keys) {
+            Text(
+                text = label,
+                color = Color(0xFFE0E0E0),
+                fontFamily = FontFamily.Monospace,
+                fontSize = 15.sp,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(Color(0xFF454545))
+                    .clickable { onKey(seq) }
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
+            )
+        }
+    }
+}
+
+private class TerminalHolder {
+    var view: TerminalView? = null
+    var session: TerminalSession? = null
+    var attached: Boolean = false
+    var cols: Int = 0
+    var rows: Int = 0
+}
+
+@Composable
+private fun rememberTerminalHolder(): TerminalHolder =
+    androidx.compose.runtime.remember { TerminalHolder() }
+
+/** TerminalSessionClient 最小实现：屏幕更新触发重绘，其余日志/忽略。 */
+private class NoopSessionClient(val onScreenUpdate: () -> Unit) : TerminalSessionClient {
+    override fun onTextChanged(changedSession: TerminalSession) { onScreenUpdate() }
+    override fun onTitleChanged(changedSession: TerminalSession) {}
+    override fun onSessionFinished(finishedSession: TerminalSession) {}
+    override fun onCopyTextToClipboard(session: TerminalSession, text: String?) {}
+    override fun onPasteTextFromClipboard(session: TerminalSession?) {}
+    override fun onBell(session: TerminalSession) {}
+    override fun onColorsChanged(session: TerminalSession) {}
+    override fun onTerminalCursorStateChange(state: Boolean) {}
+    override fun setTerminalShellPid(session: TerminalSession, pid: Int) {}
+    override fun getTerminalCursorStyle(): Int? = null
+    override fun logError(tag: String?, message: String?) { Log.e(tag ?: TAG, message ?: "") }
+    override fun logWarn(tag: String?, message: String?) { Log.w(tag ?: TAG, message ?: "") }
+    override fun logInfo(tag: String?, message: String?) { Log.i(tag ?: TAG, message ?: "") }
+    override fun logDebug(tag: String?, message: String?) { Log.d(tag ?: TAG, message ?: "") }
+    override fun logVerbose(tag: String?, message: String?) {}
+    override fun logStackTraceWithMessage(tag: String?, message: String?, e: Exception?) { Log.e(tag ?: TAG, message, e) }
+    override fun logStackTrace(tag: String?, e: Exception?) { Log.e(tag ?: TAG, "", e) }
+}
+
+/** TerminalViewClient 最小实现：按键交给 view 默认处理（写入 session），无外部修饰键。 */
+private class MinimalViewClient(
+    val baseFontPx: Int,
+    val onSetFontSize: (Int) -> Unit,
+    val onEmulatorReady: () -> Unit,
+    val onTap: () -> Unit,
+) : TerminalViewClient {
+    // 捏合缩放：scale 为相对基准字号的累计因子。算出新字号、应用（触发 updateSize→Resize 同步），
+    // 返回钳制后的因子。字号范围 12–40px。
+    override fun onScale(scale: Float): Float {
+        val newSize = (baseFontPx * scale).toInt().coerceIn(12, 40)
+        onSetFontSize(newSize)
+        return newSize.toFloat() / baseFontPx
+    }
+    override fun onSingleTapUp(e: MotionEvent?) { onTap() } // 点击终端弹出软键盘
+    override fun shouldBackButtonBeMappedToEscape(): Boolean = false
+    override fun shouldEnforceCharBasedInput(): Boolean = true
+    override fun shouldUseCtrlSpaceWorkaround(): Boolean = false
+    override fun isTerminalViewSelected(): Boolean = true
+    override fun copyModeChanged(copyMode: Boolean) {}
+    override fun onKeyDown(keyCode: Int, e: KeyEvent?, session: TerminalSession?): Boolean = false
+    override fun onKeyUp(keyCode: Int, e: KeyEvent?): Boolean = false
+    override fun onLongPress(event: MotionEvent?): Boolean = false
+    override fun readControlKey(): Boolean = false
+    override fun readAltKey(): Boolean = false
+    override fun readShiftKey(): Boolean = false
+    override fun readFnKey(): Boolean = false
+    override fun onCodePoint(codePoint: Int, ctrlDown: Boolean, session: TerminalSession?): Boolean = false
+    override fun onEmulatorSet() { onEmulatorReady() }
+    override fun logError(tag: String?, message: String?) { Log.e(tag ?: TAG, message ?: "") }
+    override fun logWarn(tag: String?, message: String?) { Log.w(tag ?: TAG, message ?: "") }
+    override fun logInfo(tag: String?, message: String?) { Log.i(tag ?: TAG, message ?: "") }
+    override fun logDebug(tag: String?, message: String?) { Log.d(tag ?: TAG, message ?: "") }
+    override fun logVerbose(tag: String?, message: String?) {}
+    override fun logStackTraceWithMessage(tag: String?, message: String?, e: Exception?) { Log.e(tag ?: TAG, message, e) }
+    override fun logStackTrace(tag: String?, e: Exception?) { Log.e(tag ?: TAG, "", e) }
+}
