@@ -98,13 +98,9 @@ async function run() {
         break;
 
       case 'error':
-        log('ERR', msg.message);
-        // 鉴权失败或创建失败都立即退出
-        if (msg.message && (msg.message.includes('鉴权') || msg.message.includes('创建会话失败'))) {
-          clearTimeout(timer);
-          ws.close();
-          reject(new Error(msg.message));
-        }
+        clearTimeout(timer);
+        ws.close();
+        reject(new Error(msg.message));
         break;
 
       default:

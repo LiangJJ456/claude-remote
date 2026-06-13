@@ -3,9 +3,9 @@
 const KEYMAP = { enter: '\r', esc: '\x1b', up: '\x1b[A', down: '\x1b[B', 1: '1', 2: '2', 3: '3' };
 
 let token = localStorage.getItem('token');
-if (!token) {
+if (!token || token === 'null') {
   token = prompt('输入宿主 token（host/data/config.json 里的 token 字段）');
-  localStorage.setItem('token', token);
+  if (token) localStorage.setItem('token', token);
 }
 
 const term = new Terminal({ fontSize: 14, scrollback: 5000 });
@@ -15,6 +15,7 @@ term.open(document.getElementById('term'));
 
 let ws;
 let current = null;
+let reconnect = true;
 
 function b64encode(str) {
   return btoa(String.fromCharCode(...new TextEncoder().encode(str)));
@@ -41,12 +42,14 @@ function connect() {
     if (msg.type === 'error') {
       console.error(msg.message);
       if (msg.message.includes('鉴权')) {
+        reconnect = false;
         localStorage.removeItem('token');
-        alert('token 错误，请刷新重输');
+        token = null;
+        alert('token 错误，请刷新页面重新输入');
       }
     }
   };
-  ws.onclose = () => setTimeout(connect, 1000);
+  ws.onclose = () => { if (reconnect) setTimeout(connect, 1000); };
 }
 
 function renderSessions(sessions) {
@@ -56,7 +59,13 @@ function renderSessions(sessions) {
     const div = document.createElement('div');
     div.className = 'session';
     const stateText = { working: '干活中', waiting: '等输入', exited: '已结束' }[s.state] || s.state;
-    div.innerHTML = `<span>${s.name}</span><span class="state-${s.state}">${stateText}${s.orphaned ? '（中断）' : ''}</span>`;
+    const nameSpan = document.createElement('span');
+    nameSpan.textContent = s.name;
+    const stateSpan = document.createElement('span');
+    stateSpan.className = `state-${s.state}`;
+    stateSpan.textContent = stateText + (s.orphaned ? '（中断）' : '');
+    div.appendChild(nameSpan);
+    div.appendChild(stateSpan);
     div.onclick = () => (s.state === 'exited' && s.orphaned ? null : attach(s.id));
     el.appendChild(div);
   }
