@@ -46,6 +46,9 @@ fun TerminalScreen(
             factory = { ctx ->
                 val view = TerminalView(ctx, null)
                 view.setTextSize(fontSizePx)
+                // Compose AndroidView 下必须显式可聚焦，否则收不到软键盘/按键事件
+                view.isFocusable = true
+                view.isFocusableInTouchMode = true
 
                 // 用户输入 → 经 RemoteInput 回调 → 发往宿主
                 val session = TerminalSession(
@@ -63,6 +66,7 @@ fun TerminalScreen(
                     }
                 })
                 view.attachSession(session)
+                view.requestFocus()
 
                 holder.view = view
                 holder.session = session
