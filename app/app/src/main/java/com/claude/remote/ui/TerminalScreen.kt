@@ -13,6 +13,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import com.claude.remote.net.ClientMsg
+import com.claude.remote.net.ConnState
 import com.claude.remote.net.HostMsg
 import com.claude.remote.terminal.TerminalCodec
 import com.termux.terminal.TerminalSession
@@ -36,6 +37,7 @@ private const val TAG = "ClaudeRemoteTerm"
 fun TerminalScreen(
     sessionId: String,
     incoming: Flow<HostMsg>,
+    connState: Flow<ConnState>,
     send: (ClientMsg) -> Unit,
     fontSizePx: Int = 20, // 较小默认值以容纳更多列（Claude 状态行 weekly 等需要足够宽度；可捏合缩放）
 ) {
@@ -103,6 +105,28 @@ fun TerminalScreen(
                 val s = holder.session ?: return@collect
                 val bytes = TerminalCodec.decodeOutput(out.dataB64)
                 s.appendBytes(bytes, bytes.size)
+            }
+        }
+    }
+
+    // 断线重连后自动重新附身：新连接上宿主无附身状态，必须重发 Attach 才能继续收输出
+    LaunchedEffect(sessionId) {
+        var wasDisconnected = false
+        connState.collect { st ->
+            when (st) {
+                ConnState.DISCONNECTED -> { wasDisconnected = true; holder.attached = false }
+                ConnState.CONNECTED -> {
+                    if (wasDisconnected) {
+                        wasDisconnected = false
+                        val emu = holder.view?.mEmulator
+                        if (emu != null) {
+                            holder.attached = true
+                            holder.cols = emu.mColumns; holder.rows = emu.mRows
+                            send(ClientMsg.Attach(sessionId, emu.mColumns, emu.mRows))
+                        }
+                    }
+                }
+                else -> {}
             }
         }
     }

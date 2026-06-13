@@ -27,6 +27,8 @@ class HostClient(
         .connectionPool(ConnectionPool(0, 1, TimeUnit.NANOSECONDS))
         .build()
     @Volatile private var ws: WebSocket? = null
+    // 主动 close() 后抑制 DISCONNECTED 回调，避免被上层误判为"真断线"而触发重连。
+    @Volatile private var closed = false
 
     fun connect() {
         onState(ConnState.CONNECTING)
@@ -40,10 +42,10 @@ class HostClient(
                 onMessage(decodeHostMsg(text))
             }
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                onState(ConnState.DISCONNECTED)
+                if (!closed) onState(ConnState.DISCONNECTED)
             }
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                onState(ConnState.DISCONNECTED)
+                if (!closed) onState(ConnState.DISCONNECTED)
             }
         })
     }
@@ -51,6 +53,7 @@ class HostClient(
     fun send(msg: ClientMsg) { ws?.send(msg.encode()) }
 
     fun close() {
+        closed = true
         // cancel() immediately closes the underlying socket (vs close() which does a
         // graceful WS handshake and leaves the TCP socket in OkHttp's connection pool).
         // This is required so MockWebServer (and production teardown) can shut down

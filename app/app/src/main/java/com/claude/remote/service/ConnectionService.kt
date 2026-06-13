@@ -33,6 +33,16 @@ class ConnectionService : Service() {
     private var client: HostClient? = null
     private var started = false
 
+    // 自动重连状态
+    private var url: String? = null
+    private var token: String? = null
+    private var wantConnected = false
+    private var reconnectAttempt = 0
+    private val reconnectRunnable = Runnable {
+        val u = url; val t = token
+        if (wantConnected && u != null && t != null) connect(u, t)
+    }
+
     override fun onBind(intent: Intent?): IBinder = binder
 
     override fun onCreate() {
@@ -42,11 +52,23 @@ class ConnectionService : Service() {
 
     /** 幂等启动前台 + 连接。Activity 拿到 config 后调用。 */
     fun start(url: String, token: String) {
+        this.url = url; this.token = token; this.wantConnected = true
         if (!started) {
             startForegroundCompat("正在连接 $url")
             started = true
         }
+        reconnectAttempt = 0
         connect(url, token)
+    }
+
+    /** 断线后按指数退避安排重连（1,2,4,8,16,封顶 30 秒）。 */
+    private fun scheduleReconnect() {
+        if (!wantConnected) return
+        main.removeCallbacks(reconnectRunnable)
+        val delay = minOf(30_000L, 1000L * (1L shl minOf(reconnectAttempt, 5)))
+        reconnectAttempt++
+        updateOngoing("已断开，${delay / 1000}s 后重连…")
+        main.postDelayed(reconnectRunnable, delay)
     }
 
     private fun startForegroundCompat(text: String) {
@@ -87,13 +109,11 @@ class ConnectionService : Service() {
             onState = { st ->
                 main.post {
                     connState.value = st
-                    updateOngoing(
-                        when (st) {
-                            ConnState.CONNECTED -> "已连接"
-                            ConnState.CONNECTING -> "连接中…"
-                            ConnState.DISCONNECTED -> "已断开"
-                        }
-                    )
+                    when (st) {
+                        ConnState.CONNECTED -> { reconnectAttempt = 0; updateOngoing("已连接") }
+                        ConnState.CONNECTING -> updateOngoing("连接中…")
+                        ConnState.DISCONNECTED -> scheduleReconnect() // 真断线 → 自动重连
+                    }
                 }
             },
         )
@@ -113,6 +133,8 @@ class ConnectionService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        wantConnected = false
+        main.removeCallbacks(reconnectRunnable)
         client?.close()
     }
 }

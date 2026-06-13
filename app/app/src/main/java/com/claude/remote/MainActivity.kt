@@ -117,6 +117,7 @@ class MainActivity : ComponentActivity() {
                             TerminalScreen(
                                 sessionId = sid,
                                 incoming = service.incoming,
+                                connState = service.connState,
                                 send = { service.send(it) },
                             )
                         }
