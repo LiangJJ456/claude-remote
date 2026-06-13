@@ -16,6 +16,26 @@
 `C:\\nvm4w\\nodejs\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe`
 （用 `(Get-Command claude).Source` 找到 claude 安装位置后定位同目录或 node_modules 下的 claude.exe。）
 
+## macOS / Linux
+
+宿主跨平台，Mac/Linux 上直接：
+
+    cd host
+    npm install
+    npm start
+
+`@lydell/node-pty` 自带 darwin-x64 / darwin-arm64 / linux 预编译二进制，免编译。
+Mac/Linux 上 `claude` 通常是 PATH 里的真实可执行文件，`claudeCommand` 默认值 `claude`
+一般可直接用；若提示找不到，把 `data/config.json` 的 `claudeCommand` 改成 `which claude`
+的完整路径（如 `/opt/homebrew/bin/claude` 或 `~/.claude/local/claude`）。
+
+开机自启：Windows 用 `register-autostart.ps1`；Mac 用 launchd（写个 LaunchAgent plist 跑
+`node src/index.js`）；Linux 用 systemd user service。`cc` 终端命令目前只有 .ps1 版（Windows）；
+Mac/Linux 用手机 app 连接即可，无需 cc。
+
+连接步骤同 Windows：装 Tailscale 登同一账号 → `npm start` → 记下打印的 token →
+手机 app「管理电脑」→「+」填 `ws://<这台的 Tailscale IP>:8787` + token。
+
 ## 使用
 
 - 电脑浏览器 / 手机（连 Tailscale）：打开 `http://<IP>:8787`，输入 token
