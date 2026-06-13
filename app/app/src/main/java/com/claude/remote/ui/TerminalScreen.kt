@@ -5,12 +5,27 @@ import android.util.Log
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.inputmethod.InputMethodManager
-import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.claude.remote.net.ClientMsg
 import com.claude.remote.net.ConnState
@@ -30,6 +45,7 @@ private const val TAG = "ClaudeRemoteTerm"
  *
  * @param sessionId 要附身的宿主会话 id
  * @param incoming  宿主下行消息流（MainActivity 提供，含 output/event）
+ * @param connState 连接状态流（用于断线重连后重新附身）
  * @param send      向宿主发送 ClientMsg
  * @param fontSizePx 终端字号（px）
  */
@@ -44,9 +60,15 @@ fun TerminalScreen(
     // 用 holder 在 AndroidView factory 与 effect 之间共享 view/session 引用
     val holder = rememberTerminalHolder()
 
-    Box(Modifier.fillMaxSize()) {
+    // 发送控制序列（快捷键栏用）：字节 → base64 → Input
+    val sendKey: (String) -> Unit = { s ->
+        val bytes = s.toByteArray(Charsets.UTF_8)
+        send(TerminalCodec.encodeInput(sessionId, bytes, 0, bytes.size))
+    }
+
+    Column(Modifier.fillMaxSize()) {
         AndroidView(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxWidth().weight(1f),
             factory = { ctx ->
                 val view = TerminalView(ctx, null)
                 view.setTextSize(fontSizePx)
@@ -96,6 +118,7 @@ fun TerminalScreen(
                 view
             },
         )
+        ShortcutBar(onKey = sendKey)
     }
 
     // 收下行：本会话的 output 喂给 emulator
@@ -137,6 +160,47 @@ fun TerminalScreen(
             send(ClientMsg.Detach(sessionId))
             holder.session?.finishIfRunning()
             holder.attached = false
+        }
+    }
+}
+
+/** 底部快捷键栏：软键盘敲不出的控制键。横向可滚动。用 Char(code) 构造序列以避免转义字面量。 */
+@Composable
+private fun ShortcutBar(onKey: (String) -> Unit) {
+    val esc = Char(27).toString()
+    val keys = listOf(
+        "Esc" to esc,
+        "Tab" to Char(9).toString(),
+        "↑" to esc + "[A",
+        "↓" to esc + "[B",
+        "←" to esc + "[D",
+        "→" to esc + "[C",
+        "⏎" to Char(13).toString(),
+        "^C" to Char(3).toString(),   // 打断
+        "^D" to Char(4).toString(),   // EOF
+        "^U" to Char(21).toString(),  // 清行
+        "^L" to Char(12).toString(),  // 清屏
+    )
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color(0xFF2A2A2A))
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 4.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        for ((label, seq) in keys) {
+            Text(
+                text = label,
+                color = Color(0xFFE0E0E0),
+                fontFamily = FontFamily.Monospace,
+                fontSize = 15.sp,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(Color(0xFF454545))
+                    .clickable { onKey(seq) }
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
+            )
         }
     }
 }
