@@ -292,3 +292,13 @@ test('listdir 不存在目录返回空 entries 不崩', async () => {
   assert.deepStrictEqual(msg.entries, []);
   c.ws.close();
 });
+
+test('listdir ::drives 返回盘符根列表', async () => {
+  const c = await authedClient(port, 'test-token');
+  c.send({ type: 'listdir', path: '::drives' });
+  const msg = await c.next((m) => m.type === 'dir');
+  assert.strictEqual(msg.path, '::drives');
+  assert.ok(msg.entries.length >= 1);
+  assert.ok(msg.entries.every((e) => /^[A-Za-z]:\\$/.test(e))); // 形如 C:\
+  c.ws.close();
+});

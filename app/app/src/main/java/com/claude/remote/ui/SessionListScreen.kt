@@ -95,26 +95,38 @@ private fun DirectoryBrowserDialog(
         }
     }
 
+    val isDrives = path == "::drives"
     val shown = entries.filter { it.contains(filter, ignoreCase = true) }
     val sep = if (path.contains("\\")) "\\" else "/"
     fun child(name: String) = if (path.endsWith(sep)) path + name else path + sep + name
+    // 磁盘列表层：entries 已是完整盘根，直接用；普通层：拼接为子路径
+    fun targetFor(name: String) = if (isDrives) name else child(name)
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("选择目录", maxLines = 1) },
         text = {
             Column(Modifier.height(420.dp)) {
-                Text(path.ifBlank { "加载中…" }, style = MaterialTheme.typography.bodySmall,
-                    maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Text(
+                        if (isDrives) "此电脑（选择磁盘）" else path.ifBlank { "加载中…" },
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = { send(ClientMsg.ListDir("::drives")) }) { Text("磁盘") }
+                }
                 Spacer(Modifier.height(6.dp))
-                OutlinedTextField(
-                    value = filter,
-                    onValueChange = { filter = it },
-                    label = { Text("筛选当前目录") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(Modifier.height(6.dp))
+                if (!isDrives) {
+                    OutlinedTextField(
+                        value = filter,
+                        onValueChange = { filter = it },
+                        label = { Text("筛选当前目录") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(6.dp))
+                }
                 LazyColumn(Modifier.weight(1f)) {
                     if (parent.isNotBlank() && parent != path) {
                         item {
@@ -125,9 +137,9 @@ private fun DirectoryBrowserDialog(
                         }
                     }
                     items(shown, key = { it }) { name ->
-                        Text("📁  $name", maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        Text((if (isDrives) "💽  " else "📁  ") + name, maxLines = 1, overflow = TextOverflow.Ellipsis,
                             modifier = Modifier
-                                .fillMaxWidth().clickable { send(ClientMsg.ListDir(child(name))) }
+                                .fillMaxWidth().clickable { send(ClientMsg.ListDir(targetFor(name))) }
                                 .padding(vertical = 12.dp))
                         HorizontalDivider()
                     }
@@ -138,7 +150,7 @@ private fun DirectoryBrowserDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { if (path.isNotBlank()) onConfirm(path) }) { Text("在此新建") }
+            TextButton(onClick = { if (path.isNotBlank() && !isDrives) onConfirm(path) }) { Text("在此新建") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
     )
