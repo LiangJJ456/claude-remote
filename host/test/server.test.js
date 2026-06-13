@@ -228,3 +228,36 @@ test('hook 字段类型不对返回 400', async () => {
   });
   assert.strictEqual(res.status, 400);
 });
+
+test('isLoopback 拒绝非回环地址（含边界）', () => {
+  assert.ok(!isLoopback('100.64.0.1'));      // Tailscale
+  assert.ok(!isLoopback('0.0.0.0'));
+  assert.ok(!isLoopback('10.0.0.1'));
+  assert.ok(!isLoopback(''));
+  assert.ok(!isLoopback(undefined));
+  assert.ok(!isLoopback('127.0.0.2'));       // 精确匹配，不是整个 127/8
+});
+
+test('多客户端并发：c1 的 input 产生的 output 同时到达 c2', async () => {
+  const c1 = await authedClient(port, 'test-token');
+  c1.send({ type: 'create', cwd: os.tmpdir() });
+  const { sessionId } = await c1.next((m) => m.type === 'created');
+  c1.send({ type: 'attach', sessionId, cols: 100, rows: 30 });
+  const c2 = await authedClient(port, 'test-token');
+  c2.send({ type: 'attach', sessionId, cols: 100, rows: 30 });
+  // 等两端都 attach 完成（各自先收到一帧快照 output）
+  await c1.next((m) => m.type === 'output' && m.sessionId === sessionId);
+  await c2.next((m) => m.type === 'output' && m.sessionId === sessionId);
+  c1.send({ type: 'input', sessionId, data: Buffer.from('Write-Output dual999\r').toString('base64') });
+  async function waitFor999(client) {
+    let acc = '';
+    while (!acc.includes('dual999')) {
+      const m = await client.next((x) => x.type === 'output' && x.sessionId === sessionId);
+      acc += Buffer.from(m.data, 'base64').toString('utf8');
+    }
+  }
+  await Promise.all([waitFor999(c1), waitFor999(c2)]);
+  manager.kill(sessionId);
+  c1.ws.close();
+  c2.ws.close();
+});

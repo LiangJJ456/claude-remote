@@ -100,7 +100,7 @@ window.addEventListener('resize', () => {
 });
 
 document.getElementById('new-session').onclick = () => {
-  const cwd = prompt('在哪个目录启动 claude？', 'C:\\Users\\galaxy\\code');
+  const cwd = prompt('在哪个目录启动 claude？（填绝对路径）');
   if (cwd) send({ type: 'create', cwd });
 };
 

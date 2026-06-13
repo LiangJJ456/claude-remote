@@ -61,10 +61,10 @@ ws.on('message', (raw) => {
 });
 
 function doAttach() {
-  send({ type: 'attach', sessionId, cols: process.stdout.columns, rows: process.stdout.rows });
   if (!process.stdin.isTTY) {
     return quit(1, '[cc] 需要在交互终端中运行\n');
   }
+  send({ type: 'attach', sessionId, cols: process.stdout.columns, rows: process.stdout.rows });
   process.stdin.setRawMode(true);
   process.stdin.resume();
   process.stdin.on('data', (buf) => {
