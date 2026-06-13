@@ -106,6 +106,8 @@ class MainActivity : ComponentActivity() {
                             ConnState.CONNECTING -> "连接中"
                             else -> "未连接"
                         },
+                        incoming = service.incoming,
+                        send = { service.send(it) },
                         onOpen = { openSessionId = it.id; screen = "terminal" },
                         onNew = { cwd -> service.send(ClientMsg.Create(cwd = cwd)) },
                         onSettings = { screen = "settings" },

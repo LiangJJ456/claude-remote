@@ -50,6 +50,10 @@ sealed interface ClientMsg {
     data class Kill(val sessionId: String) : ClientMsg {
         override fun encode() = """{"type":"kill","sessionId":${q(sessionId)}}"""
     }
+    /** 请求列出某目录下的子目录（path 空串=默认根，宿主用用户主目录）。 */
+    data class ListDir(val path: String) : ClientMsg {
+        override fun encode() = """{"type":"listdir","path":${q(path)}}"""
+    }
 }
 
 /** 宿主→客户端。 */
@@ -60,10 +64,15 @@ sealed interface HostMsg {
     data class Output(val sessionId: String, val dataB64: String) : HostMsg
     data class Event(val sessionId: String, val kind: String) : HostMsg
     data class Error(val message: String) : HostMsg
+    /** 目录列举结果：path 当前目录，parent 上级目录，entries 子目录名。 */
+    data class Dir(val path: String, val parent: String, val entries: List<String>) : HostMsg
     data object Unknown : HostMsg
 }
 
 @Serializable private data class SessionsWire(val sessions: List<SessionDto> = emptyList())
+@Serializable private data class DirWire(
+    val path: String = "", val parent: String = "", val entries: List<String> = emptyList(),
+)
 
 fun decodeHostMsg(raw: String): HostMsg {
     val obj = runCatching { json.parseToJsonElement(raw) as? JsonObject }.getOrNull() ?: return HostMsg.Unknown
@@ -75,6 +84,7 @@ fun decodeHostMsg(raw: String): HostMsg {
         "output" -> HostMsg.Output(str("sessionId").orEmpty(), str("data").orEmpty())
         "event" -> HostMsg.Event(str("sessionId").orEmpty(), str("kind").orEmpty())
         "error" -> HostMsg.Error(str("message").orEmpty())
+        "dir" -> json.decodeFromString(DirWire.serializer(), raw).let { HostMsg.Dir(it.path, it.parent, it.entries) }
         else -> HostMsg.Unknown
     }
 }

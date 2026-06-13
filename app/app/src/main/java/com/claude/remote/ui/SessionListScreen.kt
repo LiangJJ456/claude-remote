@@ -6,20 +6,28 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.claude.remote.data.Session
+import com.claude.remote.net.ClientMsg
+import com.claude.remote.net.HostMsg
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.filterIsInstance
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SessionListScreen(
     sessions: List<Session>,
     connState: String,
+    incoming: Flow<HostMsg>,
+    send: (ClientMsg) -> Unit,
     onOpen: (Session) -> Unit,
     onNew: (String) -> Unit,
     onSettings: () -> Unit,
@@ -54,33 +62,84 @@ fun SessionListScreen(
     }
 
     if (showNewDialog) {
-        NewSessionDialog(
+        DirectoryBrowserDialog(
+            incoming = incoming,
+            send = send,
             onConfirm = { cwd -> showNewDialog = false; onNew(cwd) },
             onDismiss = { showNewDialog = false },
         )
     }
 }
 
+/**
+ * 目录浏览器：向宿主请求子目录列表，点进子目录逐级浏览，筛选框过滤当前层，选定即新建。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun NewSessionDialog(onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
-    var cwd by remember { mutableStateOf("") }
+private fun DirectoryBrowserDialog(
+    incoming: Flow<HostMsg>,
+    send: (ClientMsg) -> Unit,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var path by remember { mutableStateOf("") }
+    var parent by remember { mutableStateOf("") }
+    var entries by remember { mutableStateOf<List<String>>(emptyList()) }
+    var filter by remember { mutableStateOf("") }
+
+    // 收宿主的 dir 响应，更新当前目录与子目录
+    LaunchedEffect(Unit) {
+        send(ClientMsg.ListDir("")) // 空串=主目录
+        incoming.filterIsInstance<HostMsg.Dir>().collect { d ->
+            path = d.path; parent = d.parent; entries = d.entries; filter = ""
+        }
+    }
+
+    val shown = entries.filter { it.contains(filter, ignoreCase = true) }
+    val sep = if (path.contains("\\")) "\\" else "/"
+    fun child(name: String) = if (path.endsWith(sep)) path + name else path + sep + name
+
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("新建会话") },
+        title = { Text("选择目录", maxLines = 1) },
         text = {
-            Column {
-                Text("在哪个目录启动 Claude Code？填电脑上的绝对路径。", style = MaterialTheme.typography.bodyMedium)
-                Spacer(Modifier.height(8.dp))
+            Column(Modifier.height(420.dp)) {
+                Text(path.ifBlank { "加载中…" }, style = MaterialTheme.typography.bodySmall,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.height(6.dp))
                 OutlinedTextField(
-                    value = cwd,
-                    onValueChange = { cwd = it },
-                    label = { Text("目录，如 C:\\Users\\you\\proj") },
+                    value = filter,
+                    onValueChange = { filter = it },
+                    label = { Text("筛选当前目录") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
+                Spacer(Modifier.height(6.dp))
+                LazyColumn(Modifier.weight(1f)) {
+                    if (parent.isNotBlank() && parent != path) {
+                        item {
+                            Text("📁  ..", modifier = Modifier
+                                .fillMaxWidth().clickable { send(ClientMsg.ListDir(parent)) }
+                                .padding(vertical = 12.dp))
+                            HorizontalDivider()
+                        }
+                    }
+                    items(shown, key = { it }) { name ->
+                        Text("📁  $name", maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier
+                                .fillMaxWidth().clickable { send(ClientMsg.ListDir(child(name))) }
+                                .padding(vertical = 12.dp))
+                        HorizontalDivider()
+                    }
+                    if (shown.isEmpty()) {
+                        item { Text("（无子目录）", color = Color.Gray, modifier = Modifier.padding(vertical = 12.dp)) }
+                    }
+                }
             }
         },
-        confirmButton = { TextButton(onClick = { if (cwd.isNotBlank()) onConfirm(cwd.trim()) }) { Text("新建") } },
+        confirmButton = {
+            TextButton(onClick = { if (path.isNotBlank()) onConfirm(path) }) { Text("在此新建") }
+        },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
     )
 }

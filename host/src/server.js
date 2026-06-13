@@ -1,5 +1,6 @@
 'use strict';
 const fs = require('fs');
+const os = require('os');
 const http = require('http');
 const path = require('path');
 const { WebSocketServer } = require('ws');
@@ -124,6 +125,19 @@ function createApp({ manager, config }) {
             manager.kill(msg.sessionId);
             broadcastSessions();
             break;
+          case 'listdir': {
+            const dir = (typeof msg.path === 'string' && msg.path) ? msg.path : os.homedir();
+            try {
+              const entries = fs.readdirSync(dir, { withFileTypes: true })
+                .filter((d) => d.isDirectory() && !d.name.startsWith('.'))
+                .map((d) => d.name)
+                .sort((a, b) => a.localeCompare(b));
+              send(ws, { type: 'dir', path: dir, parent: path.dirname(dir), entries });
+            } catch (e) {
+              send(ws, { type: 'dir', path: dir, parent: path.dirname(dir), entries: [] });
+            }
+            break;
+          }
           default:
             send(ws, { type: 'error', message: `未知消息类型: ${msg.type}` });
         }
