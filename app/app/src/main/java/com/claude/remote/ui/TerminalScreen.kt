@@ -68,11 +68,19 @@ fun TerminalScreen(
                 view.setTerminalViewClient(MinimalViewClient(
                     fontSizePx = fontSizePx,
                     onEmulatorReady = {
-                        // onEmulatorSet：emulator 就绪后，把当前尺寸告诉宿主并附身（回放+实时流）
+                        // onEmulatorSet 在尺寸变化时都会触发（含键盘弹出/收起导致的高度变化）。
+                        // 首次：附身（回放+实时流）；之后：把新尺寸同步给宿主，否则 claude 按旧尺寸
+                        // 渲染会导致画面错乱。
                         val emu = view.mEmulator
-                        if (emu != null && !holder.attached) {
-                            holder.attached = true
-                            send(ClientMsg.Attach(sessionId, emu.mColumns, emu.mRows))
+                        if (emu != null) {
+                            if (!holder.attached) {
+                                holder.attached = true
+                                holder.cols = emu.mColumns; holder.rows = emu.mRows
+                                send(ClientMsg.Attach(sessionId, emu.mColumns, emu.mRows))
+                            } else if (emu.mColumns != holder.cols || emu.mRows != holder.rows) {
+                                holder.cols = emu.mColumns; holder.rows = emu.mRows
+                                send(ClientMsg.Resize(sessionId, emu.mColumns, emu.mRows))
+                            }
                         }
                     },
                     onTap = { showKeyboard() },
@@ -112,6 +120,8 @@ private class TerminalHolder {
     var view: TerminalView? = null
     var session: TerminalSession? = null
     var attached: Boolean = false
+    var cols: Int = 0
+    var rows: Int = 0
 }
 
 @Composable
