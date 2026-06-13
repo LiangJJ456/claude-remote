@@ -11,7 +11,7 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 if ($Attach) {
   node "$here\attach-client.js" --attach $Attach
 } else {
-  $argv = @("$here\attach-client.js", "--create", "--cwd", (Get-Location).Path)
+  $argv = @("$here\attach-client.js", "--cwd", (Get-Location).Path)
   if ($Name) { $argv += @("--name", $Name) }
   node @argv
 }

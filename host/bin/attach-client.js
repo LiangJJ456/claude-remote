@@ -3,9 +3,13 @@ const fs = require('fs');
 const path = require('path');
 const WebSocket = require('ws');
 
-const config = JSON.parse(
-  fs.readFileSync(path.join(__dirname, '..', 'data', 'config.json'), 'utf8')
-);
+let config;
+try {
+  config = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'data', 'config.json'), 'utf8'));
+} catch (e) {
+  process.stderr.write(`[cc] 无法读取配置：${e.message}\n请先在 host/ 目录启动宿主：npm start\n`);
+  process.exit(1);
+}
 const args = process.argv.slice(2);
 function arg(name) {
   const i = args.indexOf(name);
@@ -31,7 +35,12 @@ ws.on('open', () => send({ type: 'auth', token: config.token }));
 ws.on('error', (e) => quit(1, `\n[无法连接宿主：${e.message}。宿主跑起来了吗？]\n`));
 ws.on('close', () => quit(1, '\n[连接已断开]\n'));
 ws.on('message', (raw) => {
-  const msg = JSON.parse(raw.toString());
+  let msg;
+  try {
+    msg = JSON.parse(raw.toString());
+  } catch {
+    return quit(1, '\n[消息解析失败]\n');
+  }
   if (msg.type === 'auth_ok') {
     if (sessionId) doAttach();
     else send({ type: 'create', cwd: arg('--cwd') || process.cwd(), name: arg('--name') });
@@ -53,6 +62,9 @@ ws.on('message', (raw) => {
 
 function doAttach() {
   send({ type: 'attach', sessionId, cols: process.stdout.columns, rows: process.stdout.rows });
+  if (!process.stdin.isTTY) {
+    return quit(1, '[cc] 需要在交互终端中运行\n');
+  }
   process.stdin.setRawMode(true);
   process.stdin.resume();
   process.stdin.on('data', (buf) => {
