@@ -41,7 +41,8 @@ class Settings(private val context: Context) {
             // 迁移旧单 host 配置
             val url = prefs[KEY_OLD_URL]; val token = prefs[KEY_OLD_TOKEN]
             if (!url.isNullOrBlank() && !token.isNullOrBlank()) {
-                listOf(HostEntry(name = "我的电脑", url = url, token = token))
+                // 固定 id，避免每次读取生成新 UUID 导致连接重复/选中漂移
+                listOf(HostEntry(id = "migrated-default", name = "我的电脑", url = url, token = token))
             } else emptyList()
         }
     }
