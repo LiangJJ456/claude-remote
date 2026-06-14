@@ -55,6 +55,7 @@ class HostConnection(
                         is HostMsg.AuthOk -> client?.send(ClientMsg.ListSessions)
                         is HostMsg.Created -> client?.send(ClientMsg.ListSessions)
                         is HostMsg.Event -> onEvent(this, msg)
+                        is HostMsg.Sessions -> onStateChanged() // 会话列表变化 → 刷新通知/小组件
                         else -> {}
                     }
                 }

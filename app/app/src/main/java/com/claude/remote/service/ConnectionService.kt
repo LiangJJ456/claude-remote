@@ -11,7 +11,16 @@ import com.claude.remote.data.HostEntry
 import com.claude.remote.net.ClientMsg
 import com.claude.remote.net.ConnState
 import com.claude.remote.net.HostMsg
+import androidx.glance.appwidget.updateAll
+import com.claude.remote.widget.SessionsWidget
+import com.claude.remote.widget.WidgetItem
+import com.claude.remote.widget.WidgetRepo
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 
 /**
  * 前台服务：为每台已配置电脑维护一个 [HostConnection]（同时连接所有），使 app 退后台仍保持连接并能弹通知。
@@ -29,6 +38,7 @@ class ConnectionService : Service() {
     val hosts = MutableStateFlow<List<HostEntry>>(emptyList())
 
     private var started = false
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     override fun onBind(intent: Intent?): IBinder = binder
 
@@ -56,21 +66,37 @@ class ConnectionService : Service() {
         for (entry in list) {
             val existing = connections[entry.id]
             if (existing == null) {
-                val conn = HostConnection(entry, main, ::onHostEvent, ::updateAggregateNotification)
+                val conn = HostConnection(entry, main, ::onHostEvent, ::onConnChanged)
                 connections[entry.id] = conn
                 conn.start()
             } else if (existing.entry.url != entry.url || existing.entry.token != entry.token) {
                 existing.stop()
-                val conn = HostConnection(entry, main, ::onHostEvent, ::updateAggregateNotification)
+                val conn = HostConnection(entry, main, ::onHostEvent, ::onConnChanged)
                 connections[entry.id] = conn
                 conn.start()
             }
         }
         hosts.value = list
-        updateAggregateNotification()
+        onConnChanged()
     }
 
     fun send(hostId: String, msg: ClientMsg) = connections[hostId]?.send(msg)
+
+    /** 连接/会话变化 → 刷新常驻通知 + 小组件。 */
+    private fun onConnChanged() {
+        updateAggregateNotification()
+        updateWidget()
+    }
+
+    private fun updateWidget() {
+        val items = connections.values.flatMap { conn ->
+            conn.repo.sessions.value.map { s ->
+                WidgetItem(conn.entry.id, conn.entry.name, s.id, s.name, s.state)
+            }
+        }
+        WidgetRepo.save(this, items)
+        scope.launch { runCatching { SessionsWidget().updateAll(this@ConnectionService) } }
+    }
 
     private fun startForegroundCompat(text: String) {
         val n = Notifications.ongoing(this, text)
@@ -130,5 +156,6 @@ class ConnectionService : Service() {
         super.onDestroy()
         connections.values.forEach { it.stop() }
         connections.clear()
+        scope.cancel()
     }
 }
