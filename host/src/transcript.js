@@ -1,5 +1,7 @@
 'use strict';
 const fs = require('fs');
+const path = require('path');
+const os = require('os');
 
 /**
  * 从 Claude Code 的对话记录（JSONL，每行一个事件）里提取最后一条 assistant 的纯文本。
@@ -43,4 +45,35 @@ function collapse(text, maxLen) {
   return s.length > maxLen ? s.slice(0, maxLen - 1) + '…' : s;
 }
 
-module.exports = { lastAssistantText };
+/**
+ * 根据会话 cwd 找该项目最新的 transcript（.jsonl）。Claude Code 把对话记录存在
+ * ~/.claude/projects/<把 cwd 的非字母数字字符都换成 - 的目录名>/<会话uuid>.jsonl。
+ * 一个会话停下时它的记录就是该目录里最新的那个。找不到返回 ''。
+ *
+ * @param {string} cwd 会话工作目录
+ * @param {string} baseDir projects 根目录（默认 ~/.claude/projects），便于测试注入
+ */
+function findLatestTranscript(cwd, baseDir = path.join(os.homedir(), '.claude', 'projects')) {
+  if (!cwd) return '';
+  const dir = path.join(baseDir, cwd.replace(/[^a-zA-Z0-9]/g, '-'));
+  let files;
+  try {
+    files = fs.readdirSync(dir).filter((f) => f.endsWith('.jsonl'));
+  } catch {
+    return '';
+  }
+  let newest = '';
+  let mtime = -1;
+  for (const f of files) {
+    const full = path.join(dir, f);
+    try {
+      const m = fs.statSync(full).mtimeMs;
+      if (m > mtime) { mtime = m; newest = full; }
+    } catch {
+      // 忽略读不到的文件
+    }
+  }
+  return newest;
+}
+
+module.exports = { lastAssistantText, findLatestTranscript };

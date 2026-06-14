@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { lastAssistantText } = require('../src/transcript');
+const { lastAssistantText, findLatestTranscript } = require('../src/transcript');
 
 function tmpJsonl(lines) {
   const f = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-tr-')), 'transcript.jsonl');
@@ -52,6 +52,34 @@ test('文件不存在返回空串', () => {
 test('无 assistant 消息返回空串', () => {
   const f = tmpJsonl([{ type: 'user', message: { content: [{ type: 'text', text: 'hi' }] } }]);
   assert.strictEqual(lastAssistantText(f), '');
+});
+
+test('findLatestTranscript 按 cwd 找最新 jsonl', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-proj-'));
+  const cwd = 'C:\\Users\\me\\code\\proj_x';
+  const dir = path.join(base, cwd.replace(/[^a-zA-Z0-9]/g, '-'));
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'old.jsonl'), '{}');
+  const newer = path.join(dir, 'new.jsonl');
+  fs.writeFileSync(newer, '{}');
+  // 确保 new.jsonl 更新（mtime 更大）
+  const future = Date.now() / 1000 + 10;
+  fs.utimesSync(newer, future, future);
+  assert.strictEqual(findLatestTranscript(cwd, base), newer);
+});
+
+test('findLatestTranscript 目录不存在返回空', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-proj-'));
+  assert.strictEqual(findLatestTranscript('C:\\no\\such', base), '');
+});
+
+test('cwd 净化规则：非字母数字都换成 -', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-proj-'));
+  const cwd = 'C:\\Users\\galaxy\\code\\claude_tip';
+  const dir = path.join(base, 'C--Users-galaxy-code-claude-tip');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 's.jsonl'), '{}');
+  assert.strictEqual(findLatestTranscript(cwd, base), path.join(dir, 's.jsonl'));
 });
 
 test('坏行被跳过不崩', () => {

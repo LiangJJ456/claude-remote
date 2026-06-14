@@ -4,7 +4,7 @@ const os = require('os');
 const http = require('http');
 const path = require('path');
 const { WebSocketServer } = require('ws');
-const { lastAssistantText } = require('./transcript');
+const { lastAssistantText, findLatestTranscript } = require('./transcript');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 
@@ -208,10 +208,15 @@ function createApp({ manager, config }) {
         }
         const session = manager.get(sessionId);
         if (session) {
-          // 预览文本：stop 时读 transcript 取最后一条 Claude 回复；其它（授权）用 hook 的 message
+          // 预览文本：stop 时取该会话项目最新 transcript 的最后一条 Claude 回复。
+          // 优先用 hook 传来的 transcriptPath（若有）；否则按会话 cwd 自己找（更可靠，
+          // 不依赖 hook stdin 是否成功传参）。其它（授权）用 hook 的 message。
           let preview = '';
-          if (kind === 'stop' && typeof transcriptPath === 'string' && transcriptPath) {
-            preview = lastAssistantText(transcriptPath);
+          if (kind === 'stop') {
+            const tp = (typeof transcriptPath === 'string' && transcriptPath)
+              ? transcriptPath
+              : findLatestTranscript(session.cwd);
+            if (tp) preview = lastAssistantText(tp);
           } else if (typeof message === 'string') {
             preview = message;
           }
