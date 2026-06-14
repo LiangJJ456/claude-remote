@@ -40,8 +40,15 @@ Mac/Linux 用手机 app 连接即可，无需 cc。
 
 - 电脑浏览器 / 手机（连 Tailscale）：打开 `http://<IP>:8787`，输入 token
 - 终端：`bin\cc.ps1`（建议加 PATH 或设别名）在当前目录新建会话；Ctrl+Q 离开（会话不死）
-- Hook 接入：见 `~/.claude/settings.json` 的 Stop / Notification hooks，
-  只在存在 CC_HOST_SESSION_ID 环境变量（即宿主托管的会话）时上报
+- Hook 接入：在 `~/.claude/settings.json` 配 Stop / Notification hooks，
+  只在存在 CC_HOST_SESSION_ID 环境变量（即宿主托管的会话）时上报。
+  Windows 的 Stop hook 直接调用 `host/hooks/stop-report.ps1`（去 async 确保 stdin
+  送达、纯 ASCII 避免 PS 5.1 按 GBK 误读、正则抠 session_id 而不用易出错的
+  ConvertFrom-Json）；它把停下事件 + Claude 的 session_id 报给宿主，宿主据此读出
+  **该会话自己的**最后一条回复，作为手机通知的预览内容。
+- 通知预览要能读到回复，前提是 spawn 的 claude 真的落地了 transcript 文件——宿主
+  spawn 时会剥掉继承自父进程的 `CLAUDE_CODE_*` / `CLAUDECODE` 等嵌套标记，
+  确保 claude 当作全新顶层会话运行（否则它会以子会话模式跑、不写 transcript）。
 
 ## 测试
 
