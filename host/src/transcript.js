@@ -91,9 +91,20 @@ function findSessionTranscript(cwd, baseline, baseDir = DEFAULT_BASE) {
   return newestOf(fresh.length ? fresh : all);
 }
 
+/**
+ * 最可靠：直接用 Claude 的 session_id 拼出 transcript 路径。
+ * Claude 把记录存成 <项目目录>/<session_id>.jsonl，文件名就是 session_id。
+ * 文件存在才返回，否则 ''。
+ */
+function transcriptForClaudeSession(cwd, claudeSessionId, baseDir = DEFAULT_BASE) {
+  if (!cwd || !claudeSessionId) return '';
+  const p = path.join(projectDir(cwd, baseDir), claudeSessionId + '.jsonl');
+  try { fs.accessSync(p); return p; } catch { return ''; }
+}
+
 /** 退路：某 cwd 项目目录里最新的 transcript（不区分会话）。 */
 function findLatestTranscript(cwd, baseDir = DEFAULT_BASE) {
   return newestOf(listTranscripts(cwd, baseDir));
 }
 
-module.exports = { lastAssistantText, listTranscripts, findSessionTranscript, findLatestTranscript };
+module.exports = { lastAssistantText, listTranscripts, findSessionTranscript, transcriptForClaudeSession, findLatestTranscript };

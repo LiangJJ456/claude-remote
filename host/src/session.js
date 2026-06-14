@@ -6,6 +6,21 @@ const pty = require('@lydell/node-pty');
 const { RingBuffer } = require('./ring-buffer');
 const { listTranscripts } = require('./transcript');
 
+// 宿主本身可能是在一个 claude 会话里启动的（开发/嵌套场景）。那样子进程 claude 会继承
+// CLAUDE_CODE_* / CLAUDECODE 等“嵌套子会话”标记，进而以子会话模式运行——不落地 transcript
+// 文件（只在 hook 里报一个并不存在的 transcript_path）。这里剥掉这些标记，让 spawn 出来的
+// claude 当作全新的顶层会话，正常写 transcript，手机通知才能读到回复内容。
+const NESTING_ENV_KEYS = [
+  'CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_CHILD_SESSION',
+  'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_EXECPATH', 'CLAUDE_EFFORT', 'AI_AGENT',
+];
+function cleanSpawnEnv(hostSessionId) {
+  const env = { ...process.env };
+  for (const k of NESTING_ENV_KEYS) delete env[k];
+  env.CC_HOST_SESSION_ID = hostSessionId;
+  return env;
+}
+
 class Session extends EventEmitter {
   constructor({ command, args = [], cwd, name, bufferLimit = 1024 * 1024 }) {
     super();
@@ -24,7 +39,7 @@ class Session extends EventEmitter {
       cols: 80,
       rows: 24,
       cwd,
-      env: { ...process.env, CC_HOST_SESSION_ID: this.id },
+      env: cleanSpawnEnv(this.id),
     });
     this.pty.onData((data) => {
       const buf = Buffer.from(data, 'utf8');

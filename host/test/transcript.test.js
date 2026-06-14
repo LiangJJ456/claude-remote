@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { lastAssistantText, findLatestTranscript, findSessionTranscript, listTranscripts } = require('../src/transcript');
+const { lastAssistantText, findLatestTranscript, findSessionTranscript, transcriptForClaudeSession, listTranscripts } = require('../src/transcript');
 
 function tmpJsonl(lines) {
   const f = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-tr-')), 'transcript.jsonl');
@@ -114,6 +114,29 @@ test('findSessionTranscript 没有新文件时退回目录最新', () => {
   // 基线已包含全部，没有新文件 → 退回最新的 b
   const baseline = new Set([a, b]);
   assert.strictEqual(findSessionTranscript(cwd, baseline, base), b);
+});
+
+test('transcriptForClaudeSession 用 session_id 拼出确切文件', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-proj-'));
+  const cwd = 'C:\\Users\\me\\code\\proj';
+  const dir = path.join(base, cwd.replace(/[^a-zA-Z0-9]/g, '-'));
+  fs.mkdirSync(dir, { recursive: true });
+  const sid = '7dec4c2f-2ebf-479e-8c39-5491014775d7';
+  const f = path.join(dir, sid + '.jsonl');
+  fs.writeFileSync(f, '{}');
+  // 同目录还有别的会话文件，不应被选中
+  fs.writeFileSync(path.join(dir, 'other.jsonl'), '{}');
+  assert.strictEqual(transcriptForClaudeSession(cwd, sid, base), f);
+});
+
+test('transcriptForClaudeSession 文件不存在返回空', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-proj-'));
+  assert.strictEqual(transcriptForClaudeSession('C:\\x', 'no-such-id', base), '');
+});
+
+test('transcriptForClaudeSession 缺参返回空', () => {
+  assert.strictEqual(transcriptForClaudeSession('', 'id'), '');
+  assert.strictEqual(transcriptForClaudeSession('C:\\x', ''), '');
 });
 
 test('坏行被跳过不崩', () => {

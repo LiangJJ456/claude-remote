@@ -4,7 +4,7 @@ const os = require('os');
 const http = require('http');
 const path = require('path');
 const { WebSocketServer } = require('ws');
-const { lastAssistantText, findSessionTranscript } = require('./transcript');
+const { lastAssistantText, findSessionTranscript, transcriptForClaudeSession } = require('./transcript');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 
@@ -201,7 +201,7 @@ function createApp({ manager, config }) {
     });
     req.on('end', () => {
       try {
-        const { sessionId, kind, transcriptPath, message } = JSON.parse(body);
+        const { sessionId, kind, transcriptPath, claudeSessionId, message } = JSON.parse(body);
         if (typeof sessionId !== 'string' || typeof kind !== 'string') {
           res.writeHead(400);
           return res.end();
@@ -209,13 +209,16 @@ function createApp({ manager, config }) {
         const session = manager.get(sessionId);
         if (session) {
           // 预览文本：stop 时取“该会话自己的” transcript 的最后一条 Claude 回复。
-          // 优先用 hook 传来的 transcriptPath（最精确）；否则按会话基线找它自己的那个
-          // （同一目录多会话也不会取错，且不依赖 hook stdin 传参）。其它（授权）用 message。
+          // 取文件优先级：1) hook 传的 transcriptPath（若有）；2) 用 Claude 的
+          // session_id 拼路径（最可靠，<cwd目录>/<session_id>.jsonl）；3) 退回会话基线猜。
+          // 其它（授权）用 message。
           let preview = '';
           if (kind === 'stop') {
-            const tp = (typeof transcriptPath === 'string' && transcriptPath)
-              ? transcriptPath
-              : findSessionTranscript(session.cwd, session.transcriptBaseline);
+            let tp = (typeof transcriptPath === 'string' && transcriptPath) ? transcriptPath : '';
+            if (!tp && typeof claudeSessionId === 'string' && claudeSessionId) {
+              tp = transcriptForClaudeSession(session.cwd, claudeSessionId);
+            }
+            if (!tp) tp = findSessionTranscript(session.cwd, session.transcriptBaseline);
             if (tp) preview = lastAssistantText(tp);
           } else if (typeof message === 'string') {
             preview = message;
