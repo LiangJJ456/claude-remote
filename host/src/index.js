@@ -4,8 +4,11 @@ const { loadConfig } = require('./config');
 const { SessionManager } = require('./session-manager');
 const { createApp } = require('./server');
 const { getBindAddresses } = require('./net');
+const { registerCcOnStartup } = require('./cc-register');
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
+const CC_WIN_SCRIPT = path.join(__dirname, '..', 'bin', 'cc.ps1');
+const CC_POSIX_SCRIPT = path.join(__dirname, '..', 'bin', 'cc.sh');
 
 async function main() {
   const config = loadConfig(DATA_DIR);
@@ -40,6 +43,8 @@ async function main() {
     console.log('提示：未检测到 Tailscale 网卡，目前只能本机访问（装好 Tailscale 后重启宿主生效）。');
   }
   console.log(`token: ${config.token.slice(0, 8)}…（完整 token 见 host/data/config.json）`);
+  // 绑好端口后顺手把 cc 登记进当前 shell 的启动文件（best-effort，失败只 warn）
+  registerCcOnStartup({ winScript: CC_WIN_SCRIPT, posixScript: CC_POSIX_SCRIPT });
 }
 
 main().catch((err) => {

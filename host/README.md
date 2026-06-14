@@ -30,8 +30,8 @@ Mac/Linux 上 `claude` 通常是 PATH 里的真实可执行文件，`claudeComma
 的完整路径（如 `/opt/homebrew/bin/claude` 或 `~/.claude/local/claude`）。
 
 开机自启：Windows 用 `register-autostart.ps1`；Mac 用 launchd（写个 LaunchAgent plist 跑
-`node src/index.js`）；Linux 用 systemd user service。`cc` 终端命令目前只有 .ps1 版（Windows）；
-Mac/Linux 用手机 app 连接即可，无需 cc。
+`node src/index.js`）；Linux 用 systemd user service。`cc` 终端命令 Windows 用 `bin/cc.ps1`、
+Mac/Linux 用 `bin/cc.sh`，宿主启动时会自动把 `cc` 登记进当前 shell 的启动文件（见下）。
 
 连接步骤同 Windows：装 Tailscale 登同一账号 → `npm start` → 记下打印的 token →
 手机 app「管理电脑」→「+」填 `ws://<这台的 Tailscale IP>:8787` + token。
@@ -39,7 +39,11 @@ Mac/Linux 用手机 app 连接即可，无需 cc。
 ## 使用
 
 - 电脑浏览器 / 手机（连 Tailscale）：打开 `http://<IP>:8787`，输入 token
-- 终端：`bin\cc.ps1`（建议加 PATH 或设别名）在当前目录新建会话；Ctrl+Q 离开（会话不死）
+- 终端：敲 `cc` 在当前目录新建宿主托管会话；Ctrl+Q 离开（会话不死，手机/网页可接管）。
+  宿主启动时会幂等地把 `cc` 函数写进当前 shell 的启动文件（Windows→PowerShell `$PROFILE`；
+  zsh→`~/.zshrc`；bash→`~/.bashrc`（mac 为 `~/.bash_profile`）；fish→`~/.config/fish/config.fish`），
+  只动一对 `# >>> claude-remote cc (auto)` 标记包起来的块。**新开终端**才生效（shell 规矩）。
+  想手动注册一次：`node scripts/register-cc.js`。也可直接跑 `bin/cc.ps1` / `bin/cc.sh`。
 - Hook 接入：在 `~/.claude/settings.json` 配 Stop / Notification hooks，
   只在存在 CC_HOST_SESSION_ID 环境变量（即宿主托管的会话）时上报。
   Windows 的 Stop hook 直接调用 `host/hooks/stop-report.ps1`（去 async 确保 stdin
