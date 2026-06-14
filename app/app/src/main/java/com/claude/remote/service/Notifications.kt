@@ -19,6 +19,9 @@ object Notifications {
     const val ONGOING_ID = 1
     const val EXTRA_SESSION_ID = "sessionId"
     const val EXTRA_HOST_ID = "hostId"
+    // 通知动作：发往 ConnectionService 的快捷输入（不打开 UI）
+    const val ACTION_SEND_INPUT = "com.claude.remote.SEND_INPUT"
+    const val EXTRA_INPUT = "input"
 
     fun ensureChannels(ctx: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -43,18 +46,46 @@ object Notifications {
             .setContentIntent(openAppIntent(ctx, null, null))
             .build()
 
-    /** 事件提醒（停下/请求授权）。点击直达对应电脑的会话终端页。 */
-    fun event(ctx: Context, hostId: String, sessionId: String, title: String, text: String) {
-        val n = NotificationCompat.Builder(ctx, CHANNEL_EVENT)
+    /**
+     * 事件提醒（停下/请求授权）。点击直达对应电脑的会话；带快捷按钮直接发输入（不开 UI）。
+     * @param kind "stop" → 「继续」按钮；"permission_request" → 「批准」「拒绝」按钮
+     */
+    fun event(ctx: Context, hostId: String, sessionId: String, kind: String, title: String, text: String) {
+        val esc = Char(27).toString()
+        val cr = Char(13).toString()
+        val b = NotificationCompat.Builder(ctx, CHANNEL_EVENT)
             .setContentTitle(title)
             .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text)) // 多行展开看回复
             .setSmallIcon(R.drawable.ic_notification)
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setContentIntent(openAppIntent(ctx, hostId, sessionId))
-            .build()
+
+        when (kind) {
+            "stop" -> b.addAction(0, "继续", inputIntent(ctx, hostId, sessionId, "继续" + cr))
+            "permission_request" -> {
+                b.addAction(0, "批准", inputIntent(ctx, hostId, sessionId, cr))   // Enter 接受高亮的"是"
+                b.addAction(0, "拒绝", inputIntent(ctx, hostId, sessionId, esc))  // Esc 取消
+            }
+        }
         // 用 (host+session) 的 hashCode 作为通知 id：同会话的新事件覆盖旧的
-        NotificationManagerCompat.from(ctx).notify((hostId + sessionId).hashCode(), n)
+        NotificationManagerCompat.from(ctx).notify((hostId + sessionId).hashCode(), b.build())
+    }
+
+    /** 构造"发送输入到指定会话"的 PendingIntent（投递到 ConnectionService.onStartCommand）。 */
+    private fun inputIntent(ctx: Context, hostId: String, sessionId: String, input: String): PendingIntent {
+        val intent = Intent(ctx, ConnectionService::class.java).apply {
+            action = ACTION_SEND_INPUT
+            putExtra(EXTRA_HOST_ID, hostId)
+            putExtra(EXTRA_SESSION_ID, sessionId)
+            putExtra(EXTRA_INPUT, input)
+        }
+        val reqCode = (hostId + sessionId + input).hashCode()
+        return PendingIntent.getService(
+            ctx, reqCode, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
     }
 
     private fun openAppIntent(ctx: Context, hostId: String?, sessionId: String?): PendingIntent {

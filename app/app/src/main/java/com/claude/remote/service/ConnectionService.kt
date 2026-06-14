@@ -91,16 +91,39 @@ class ConnectionService : Service() {
             .notify(Notifications.ONGOING_ID, Notifications.ongoing(this, "$connected/$total 台已连接"))
     }
 
-    /** 某台电脑的会话事件 → 本地通知（带电脑名与 hostId，点击直达对应电脑的会话）。 */
+    /** 某台电脑的会话事件 → 本地通知（带电脑名、hostId、Claude 回复预览、快捷按钮）。 */
     private fun onHostEvent(conn: HostConnection, ev: HostMsg.Event) {
         val sessionName = conn.repo.sessions.value.firstOrNull { it.id == ev.sessionId }?.name
             ?: ev.sessionId.take(6)
-        val hostName = conn.entry.name
+        val head = "${conn.entry.name} · 「$sessionName」"
         when (ev.kind) {
-            "stop" -> Notifications.event(this, conn.entry.id, ev.sessionId, "会话等待输入", "$hostName · 「$sessionName」已停下，点开继续")
-            "permission_request" -> Notifications.event(this, conn.entry.id, ev.sessionId, "请求授权", "$hostName · 「$sessionName」需要你批准")
+            "stop" -> Notifications.event(
+                this, conn.entry.id, ev.sessionId, "stop", "会话等待输入",
+                if (ev.preview.isNotBlank()) "$head\n${ev.preview}" else "$head 已停下，点开继续",
+            )
+            "permission_request" -> Notifications.event(
+                this, conn.entry.id, ev.sessionId, "permission_request", "请求授权",
+                if (ev.preview.isNotBlank()) "$head\n${ev.preview}" else "$head 需要你批准操作",
+            )
             else -> {}
         }
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // 通知快捷按钮 → 直接向对应会话发送输入（不打开 UI）
+        if (intent?.action == Notifications.ACTION_SEND_INPUT) {
+            val hostId = intent.getStringExtra(Notifications.EXTRA_HOST_ID)
+            val sessionId = intent.getStringExtra(Notifications.EXTRA_SESSION_ID)
+            val input = intent.getStringExtra(Notifications.EXTRA_INPUT)
+            if (hostId != null && sessionId != null && input != null) {
+                val bytes = input.toByteArray(Charsets.UTF_8)
+                val b64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+                connections[hostId]?.send(ClientMsg.Input(sessionId, b64))
+                androidx.core.app.NotificationManagerCompat.from(this)
+                    .cancel((hostId + sessionId).hashCode())
+            }
+        }
+        return START_STICKY
     }
 
     override fun onDestroy() {

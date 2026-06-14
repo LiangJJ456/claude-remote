@@ -62,7 +62,7 @@ sealed interface HostMsg {
     data class Sessions(val sessions: List<SessionDto>) : HostMsg
     data class Created(val sessionId: String) : HostMsg
     data class Output(val sessionId: String, val dataB64: String) : HostMsg
-    data class Event(val sessionId: String, val kind: String) : HostMsg
+    data class Event(val sessionId: String, val kind: String, val preview: String = "") : HostMsg
     data class Error(val message: String) : HostMsg
     /** 目录列举结果：path 当前目录，parent 上级目录，entries 子目录名。 */
     data class Dir(val path: String, val parent: String, val entries: List<String>) : HostMsg
@@ -82,7 +82,7 @@ fun decodeHostMsg(raw: String): HostMsg {
         "sessions" -> HostMsg.Sessions(json.decodeFromString(SessionsWire.serializer(), raw).sessions)
         "created" -> HostMsg.Created(str("sessionId").orEmpty())
         "output" -> HostMsg.Output(str("sessionId").orEmpty(), str("data").orEmpty())
-        "event" -> HostMsg.Event(str("sessionId").orEmpty(), str("kind").orEmpty())
+        "event" -> HostMsg.Event(str("sessionId").orEmpty(), str("kind").orEmpty(), str("preview").orEmpty())
         "error" -> HostMsg.Error(str("message").orEmpty())
         "dir" -> json.decodeFromString(DirWire.serializer(), raw).let { HostMsg.Dir(it.path, it.parent, it.entries) }
         else -> HostMsg.Unknown

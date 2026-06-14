@@ -4,6 +4,7 @@ const os = require('os');
 const http = require('http');
 const path = require('path');
 const { WebSocketServer } = require('ws');
+const { lastAssistantText } = require('./transcript');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 
@@ -30,8 +31,9 @@ function createApp({ manager, config }) {
     for (const ws of authed) send(ws, msg);
   }
 
-  function broadcastEvent(sessionId, kind) {
+  function broadcastEvent(sessionId, kind, preview) {
     const msg = { type: 'event', sessionId, kind };
+    if (preview) msg.preview = preview;
     for (const ws of authed) send(ws, msg);
   }
 
@@ -199,15 +201,22 @@ function createApp({ manager, config }) {
     });
     req.on('end', () => {
       try {
-        const { sessionId, kind } = JSON.parse(body);
+        const { sessionId, kind, transcriptPath, message } = JSON.parse(body);
         if (typeof sessionId !== 'string' || typeof kind !== 'string') {
           res.writeHead(400);
           return res.end();
         }
         const session = manager.get(sessionId);
         if (session) {
+          // 预览文本：stop 时读 transcript 取最后一条 Claude 回复；其它（授权）用 hook 的 message
+          let preview = '';
+          if (kind === 'stop' && typeof transcriptPath === 'string' && transcriptPath) {
+            preview = lastAssistantText(transcriptPath);
+          } else if (typeof message === 'string') {
+            preview = message;
+          }
           // event 先于状态变化广播；stop 的 setState 会经 manager 监听器触发唯一一次 sessions 广播
-          broadcastEvent(sessionId, kind);
+          broadcastEvent(sessionId, kind, preview);
           if (kind === 'stop') session.setState('waiting');
           else broadcastSessions();
         }
