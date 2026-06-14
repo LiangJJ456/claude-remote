@@ -7,6 +7,7 @@ const path = require('path');
 const { SessionManager } = require('../src/session-manager');
 const { createApp, isLoopback } = require('../src/server');
 const { TestClient, authedClient } = require('./ws-helper');
+const { waitFor } = require('./helpers');
 
 const PS_ARGS = ['-NoLogo', '-NoProfile'];
 const config = { token: 'test-token', port: 0 };
@@ -119,6 +120,32 @@ test('第二个客户端附身能收到缓冲回放', async () => {
   c2.send({ type: 'attach', sessionId, cols: 100, rows: 30 });
   const replay = await c2.next((m) => m.type === 'output' && m.sessionId === sessionId);
   assert.ok(Buffer.from(replay.data, 'base64').toString('utf8').includes('replay456'));
+  manager.kill(sessionId);
+  c1.ws.close();
+  c2.ws.close();
+});
+
+test('一端离开后会话尺寸恢复到仍在看的端（不再停在已离开端的尺寸）', async () => {
+  const c1 = await authedClient(port, 'test-token');
+  c1.send({ type: 'create', cwd: os.tmpdir() });
+  const { sessionId } = await c1.next((m) => m.type === 'created');
+  const sess = manager.get(sessionId);
+  const resizes = [];
+  const origResize = sess.resize.bind(sess);
+  sess.resize = (cols, rows) => { resizes.push(`${cols}x${rows}`); return origResize(cols, rows); };
+
+  c1.send({ type: 'attach', sessionId, cols: 120, rows: 40 });
+  await c1.next((m) => m.type === 'output' && m.sessionId === sessionId);
+  const c2 = await authedClient(port, 'test-token');
+  c2.send({ type: 'attach', sessionId, cols: 50, rows: 20 });
+  await c2.next((m) => m.type === 'output' && m.sessionId === sessionId);
+  assert.ok(resizes.includes('50x20'), '最后 attach 的窄端尺寸应生效');
+
+  // 窄端离开 → 应把会话尺寸恢复到仍在看的 c1（120x40），而不是停在 50x20
+  c2.send({ type: 'detach', sessionId });
+  await waitFor(() => resizes[resizes.length - 1] === '120x40');
+  assert.strictEqual(resizes[resizes.length - 1], '120x40');
+
   manager.kill(sessionId);
   c1.ws.close();
   c2.ws.close();

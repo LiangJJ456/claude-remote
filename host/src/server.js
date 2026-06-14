@@ -22,6 +22,26 @@ function createApp({ manager, config }) {
   const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
   const authed = new Set();
 
+  // 每个会话各端上报的终端尺寸：sessionId -> Map<ws, {cols,rows}>。
+  // attach/resize 仍是“最后一个说了算”（保持原行为）；额外的用途是：某端离开后，把会话尺寸
+  // 恢复到仍在看的端，避免会话停在已离开端的尺寸上、令剩下的端一直显示错乱。
+  const sessionViewers = new Map();
+  function trackSize(sid, ws, cols, rows) {
+    if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols <= 0 || rows <= 0) return;
+    let m = sessionViewers.get(sid);
+    if (!m) { m = new Map(); sessionViewers.set(sid, m); }
+    m.set(ws, { cols, rows });
+  }
+  function dropSize(sid, ws) {
+    const m = sessionViewers.get(sid);
+    if (!m) return;
+    m.delete(ws);
+    if (m.size === 0) { sessionViewers.delete(sid); return; }
+    // 还有别的端在看：把会话尺寸恢复到某个仍在看的端 → 触发 Claude 按其尺寸整屏重画、画面恢复
+    const s = manager.get(sid);
+    if (s) { const last = [...m.values()].pop(); s.resize(last.cols, last.rows); }
+  }
+
   function send(ws, msg) {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
   }
@@ -93,6 +113,7 @@ function createApp({ manager, config }) {
             if (Number.isInteger(msg.cols) && Number.isInteger(msg.rows) && msg.cols > 0 && msg.rows > 0) {
               session.resize(msg.cols, msg.rows);
             }
+            trackSize(session.id, ws, msg.cols, msg.rows);
             // 先挂实时流 handler 再发快照：两步在同一同步块内，PTY 数据事件不可能插入其间，
             // 但显式的注册先行让顺序语义不依赖单线程时序推理
             const handler = (buf) =>
@@ -114,6 +135,7 @@ function createApp({ manager, config }) {
           case 'resize':
             if (session && Number.isInteger(msg.cols) && Number.isInteger(msg.rows) && msg.cols > 0 && msg.rows > 0) {
               session.resize(msg.cols, msg.rows);
+              trackSize(session.id, ws, msg.cols, msg.rows);
             }
             break;
           case 'detach': {
@@ -121,6 +143,7 @@ function createApp({ manager, config }) {
             // session 已不在 manager 中时无需 off：其 PTY 已死，handler 不会再被触发
             if (handler && session) session.off('data', handler);
             attached.delete(msg.sessionId);
+            dropSize(msg.sessionId, ws); // 本端离开后把尺寸恢复到仍在看的端
             break;
           }
           case 'kill':
@@ -167,6 +190,7 @@ function createApp({ manager, config }) {
       for (const [id, handler] of attached) {
         const s = manager.get(id);
         if (s) s.off('data', handler);
+        dropSize(id, ws); // 断线后把各会话尺寸恢复到仍在看的端
       }
       attached.clear();
     });
