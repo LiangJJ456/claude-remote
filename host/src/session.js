@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const { EventEmitter } = require('events');
 const pty = require('@lydell/node-pty');
 const { RingBuffer } = require('./ring-buffer');
+const { listTranscripts } = require('./transcript');
 
 class Session extends EventEmitter {
   constructor({ command, args = [], cwd, name, bufferLimit = 1024 * 1024 }) {
@@ -13,6 +14,9 @@ class Session extends EventEmitter {
     this.name = name || path.basename(cwd) || cwd;
     this.cwd = cwd;
     this.createdAt = new Date().toISOString();
+    // 创建时已存在的 transcript（基线）：会话停下时“新出现的那个”就是它自己的，
+    // 这样同一目录下有多个会话也不会取错（见 transcript.findSessionTranscript）。
+    this.transcriptBaseline = new Set(listTranscripts(cwd));
     this.state = 'working';
     this.buffer = new RingBuffer(bufferLimit);
     this.pty = pty.spawn(command, args, {

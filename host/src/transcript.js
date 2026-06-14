@@ -45,35 +45,55 @@ function collapse(text, maxLen) {
   return s.length > maxLen ? s.slice(0, maxLen - 1) + '…' : s;
 }
 
-/**
- * 根据会话 cwd 找该项目最新的 transcript（.jsonl）。Claude Code 把对话记录存在
- * ~/.claude/projects/<把 cwd 的非字母数字字符都换成 - 的目录名>/<会话uuid>.jsonl。
- * 一个会话停下时它的记录就是该目录里最新的那个。找不到返回 ''。
- *
- * @param {string} cwd 会话工作目录
- * @param {string} baseDir projects 根目录（默认 ~/.claude/projects），便于测试注入
- */
-function findLatestTranscript(cwd, baseDir = path.join(os.homedir(), '.claude', 'projects')) {
-  if (!cwd) return '';
-  const dir = path.join(baseDir, cwd.replace(/[^a-zA-Z0-9]/g, '-'));
-  let files;
+const DEFAULT_BASE = path.join(os.homedir(), '.claude', 'projects');
+
+/** cwd → Claude 项目目录（非字母数字字符都换成 -）。 */
+function projectDir(cwd, baseDir = DEFAULT_BASE) {
+  return path.join(baseDir, cwd.replace(/[^a-zA-Z0-9]/g, '-'));
+}
+
+/** 列出某 cwd 项目目录下所有 transcript 全路径。 */
+function listTranscripts(cwd, baseDir = DEFAULT_BASE) {
+  if (!cwd) return [];
   try {
-    files = fs.readdirSync(dir).filter((f) => f.endsWith('.jsonl'));
+    return fs.readdirSync(projectDir(cwd, baseDir))
+      .filter((f) => f.endsWith('.jsonl'))
+      .map((f) => path.join(projectDir(cwd, baseDir), f));
   } catch {
-    return '';
+    return [];
   }
+}
+
+function newestOf(paths) {
   let newest = '';
   let mtime = -1;
-  for (const f of files) {
-    const full = path.join(dir, f);
+  for (const p of paths) {
     try {
-      const m = fs.statSync(full).mtimeMs;
-      if (m > mtime) { mtime = m; newest = full; }
+      const m = fs.statSync(p).mtimeMs;
+      if (m > mtime) { mtime = m; newest = p; }
     } catch {
-      // 忽略读不到的文件
+      // 忽略读不到的
     }
   }
   return newest;
 }
 
-module.exports = { lastAssistantText, findLatestTranscript };
+/**
+ * 找“这个会话自己的” transcript：相对会话创建时的基线（baseline），新出现的那个就是它的。
+ * 这样同一目录下有多个会话时也不会选错。没有新文件则退回该目录最新的。
+ *
+ * @param {string} cwd 会话工作目录
+ * @param {Set<string>} baseline 会话创建时已存在的 transcript 路径集合
+ */
+function findSessionTranscript(cwd, baseline, baseDir = DEFAULT_BASE) {
+  const all = listTranscripts(cwd, baseDir);
+  const fresh = baseline ? all.filter((p) => !baseline.has(p)) : all;
+  return newestOf(fresh.length ? fresh : all);
+}
+
+/** 退路：某 cwd 项目目录里最新的 transcript（不区分会话）。 */
+function findLatestTranscript(cwd, baseDir = DEFAULT_BASE) {
+  return newestOf(listTranscripts(cwd, baseDir));
+}
+
+module.exports = { lastAssistantText, listTranscripts, findSessionTranscript, findLatestTranscript };

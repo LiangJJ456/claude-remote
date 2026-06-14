@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { lastAssistantText, findLatestTranscript } = require('../src/transcript');
+const { lastAssistantText, findLatestTranscript, findSessionTranscript, listTranscripts } = require('../src/transcript');
 
 function tmpJsonl(lines) {
   const f = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-tr-')), 'transcript.jsonl');
@@ -80,6 +80,40 @@ test('cwd 净化规则：非字母数字都换成 -', () => {
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 's.jsonl'), '{}');
   assert.strictEqual(findLatestTranscript(cwd, base), path.join(dir, 's.jsonl'));
+});
+
+test('findSessionTranscript 只取基线之后新出现的那个（同目录多会话不取错）', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-proj-'));
+  const cwd = 'C:\\Users\\me\\code\\multi';
+  const dir = path.join(base, cwd.replace(/[^a-zA-Z0-9]/g, '-'));
+  fs.mkdirSync(dir, { recursive: true });
+  // 会话创建时已有一个别的会话的记录（比如开发会话），且它后来一直在写（mtime 最新）
+  const other = path.join(dir, 'other.jsonl');
+  fs.writeFileSync(other, '{}');
+  const baseline = new Set(listTranscripts(cwd, base));
+  // 本会话创建后才出现自己的记录
+  const mine = path.join(dir, 'mine.jsonl');
+  fs.writeFileSync(mine, '{}');
+  // 让 other 的 mtime 比 mine 更新——若按“目录最新”会取错成 other
+  const future = Date.now() / 1000 + 10;
+  fs.utimesSync(other, future, future);
+  assert.strictEqual(findSessionTranscript(cwd, baseline, base), mine);
+});
+
+test('findSessionTranscript 没有新文件时退回目录最新', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-proj-'));
+  const cwd = 'C:\\Users\\me\\code\\noNew';
+  const dir = path.join(base, cwd.replace(/[^a-zA-Z0-9]/g, '-'));
+  fs.mkdirSync(dir, { recursive: true });
+  const a = path.join(dir, 'a.jsonl');
+  const b = path.join(dir, 'b.jsonl');
+  fs.writeFileSync(a, '{}');
+  fs.writeFileSync(b, '{}');
+  const future = Date.now() / 1000 + 10;
+  fs.utimesSync(b, future, future);
+  // 基线已包含全部，没有新文件 → 退回最新的 b
+  const baseline = new Set([a, b]);
+  assert.strictEqual(findSessionTranscript(cwd, baseline, base), b);
 });
 
 test('坏行被跳过不崩', () => {
